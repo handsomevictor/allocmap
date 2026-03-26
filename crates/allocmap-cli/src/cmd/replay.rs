@@ -1,10 +1,15 @@
 use anyhow::Result;
 use clap::Args;
 use std::fs::File;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use allocmap_core::recording::AllocMapRecording;
 use allocmap_core::sample::SampleFrame;
 use tokio::sync::mpsc;
+
+/// Sentinel value meaning "no seek pending"
+const NO_SEEK: u64 = u64::MAX;
 
 #[derive(Args, Debug)]
 pub struct ReplayArgs {
@@ -69,6 +74,8 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
 
     let speed = args.speed.clamp(0.1, 100.0);
 
+    let total_duration_ms = frames.last().map(|f| f.timestamp_ms).unwrap_or(0);
+
     eprintln!(
         "Replaying '{}': {} frames, pid={}, program={}",
         args.file,
@@ -77,37 +84,102 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
         recording.header.program_name
     );
 
-    // 4. Create TUI
+    // 4. Shared state between feeder and App
+    let pause_flag = Arc::new(AtomicBool::new(false));
+    let seek_target = Arc::new(AtomicU64::new(NO_SEEK));
+
+    // 5. Create TUI app with shared handles
     allocmap_tui::install_panic_hook();
-    let top_n = 20usize;
     let mut app = allocmap_tui::App::new(
         recording.header.pid,
         recording.header.program_name.clone(),
-        top_n,
+        20,
     );
     app.is_replay = true;
     app.replay_speed = speed;
+    app.replay_total_ms = total_duration_ms;
+    app.pause_flag = Some(Arc::clone(&pause_flag));
+    app.seek_target = Some(Arc::clone(&seek_target));
 
     let (tx, mut rx) = mpsc::channel::<SampleFrame>(256);
 
-    // 5. Spawn frame feeder — replays frames at recorded timing adjusted for speed
-    let speed_clone = speed;
+    // 6. Spawn frame feeder with pause/seek support
+    let frames = Arc::new(frames);
+    let frames_feeder = Arc::clone(&frames);
+    let pause_clone = Arc::clone(&pause_flag);
+    let seek_clone = Arc::clone(&seek_target);
+
     tokio::spawn(async move {
-        let mut prev_ts = frames[0].timestamp_ms;
-        for frame in frames {
-            let delay_ms =
-                ((frame.timestamp_ms.saturating_sub(prev_ts)) as f64 / speed_clone) as u64;
-            if delay_ms > 0 {
-                tokio::time::sleep(Duration::from_millis(delay_ms.min(2000))).await;
+        let mut idx = 0usize;
+        let frames = frames_feeder;
+
+        loop {
+            // Check for a pending seek at the top of every iteration
+            let seek_req = seek_clone.swap(NO_SEEK, Ordering::AcqRel);
+            if seek_req != NO_SEEK {
+                idx = frames.partition_point(|f| f.timestamp_ms < seek_req);
+                idx = idx.min(frames.len().saturating_sub(1));
             }
-            prev_ts = frame.timestamp_ms;
+
+            if idx >= frames.len() {
+                break;
+            }
+
+            // Handle pause — spin in 50ms chunks, still checking seek
+            while pause_clone.load(Ordering::Relaxed) {
+                let seek_req = seek_clone.swap(NO_SEEK, Ordering::AcqRel);
+                if seek_req != NO_SEEK {
+                    idx = frames.partition_point(|f| f.timestamp_ms < seek_req);
+                    idx = idx.min(frames.len().saturating_sub(1));
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+
+            // Calculate inter-frame delay
+            let delay_ms = if idx > 0 {
+                ((frames[idx].timestamp_ms.saturating_sub(frames[idx - 1].timestamp_ms)) as f64
+                    / speed) as u64
+            } else {
+                0
+            };
+
+            // Sleep in 50ms chunks so pause/seek are responsive
+            let capped_delay = delay_ms.min(2000);
+            let mut elapsed = 0u64;
+            let mut interrupted = false;
+            while elapsed < capped_delay {
+                // Check pause during delay
+                if pause_clone.load(Ordering::Relaxed) {
+                    interrupted = true;
+                    break;
+                }
+                // Check seek during delay
+                let seek_req = seek_clone.swap(NO_SEEK, Ordering::AcqRel);
+                if seek_req != NO_SEEK {
+                    idx = frames.partition_point(|f| f.timestamp_ms < seek_req);
+                    idx = idx.min(frames.len().saturating_sub(1));
+                    interrupted = true;
+                    break;
+                }
+                let chunk = 50u64.min(capped_delay - elapsed);
+                tokio::time::sleep(Duration::from_millis(chunk)).await;
+                elapsed += chunk;
+            }
+
+            if interrupted {
+                // Do not advance idx; restart the loop to re-check pause/seek state
+                continue;
+            }
+
+            let frame = frames[idx].clone();
             if tx.send(frame).await.is_err() {
                 break; // TUI quit
             }
+            idx += 1;
         }
     });
 
-    // 6. Run TUI loop (no duration limit — replay ends when feeder closes channel)
+    // 7. Run TUI loop (no duration limit — replay ends when feeder closes channel)
     let mut terminal = allocmap_tui::init_terminal()
         .map_err(|e| anyhow::anyhow!("Failed to initialize terminal: {}", e))?;
     let result = allocmap_tui::run_tui_loop(&mut app, &mut terminal, &mut rx, None).await;
@@ -148,6 +220,8 @@ mod tests {
                 alloc_rate: 0.0,
                 free_rate: 0.0,
                 top_sites: vec![],
+                thread_count: 0,
+                thread_ids: vec![],
             })
             .collect();
 
@@ -160,5 +234,10 @@ mod tests {
             .collect();
         // timestamps 2000, 3000, 4000, 5000, 6000, 7000 → 6 frames
         assert_eq!(filtered.len(), 6);
+    }
+
+    #[test]
+    fn test_no_seek_sentinel_is_u64_max() {
+        assert_eq!(NO_SEEK, u64::MAX);
     }
 }

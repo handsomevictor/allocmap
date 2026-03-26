@@ -132,12 +132,14 @@ pub async fn run_tui_loop(
             } else {
                 format!("▽ -{}/s", timeline::format_bytes((-growth) as u64))
             };
+            let thread_count = app.latest_frame().map(|f| f.thread_count).unwrap_or(1);
             let stats_text = format!(
-                " LIVE HEAP: {}  {}  ALLOCS: {}/s  FREES: {}/s",
+                " LIVE HEAP: {}  {}  ALLOCS: {}/s  FREES: {}/s  THREADS: {}",
                 heap_str,
                 growth_str,
                 timeline::format_bytes(app.current_alloc_rate() as u64),
                 timeline::format_bytes(app.current_free_rate() as u64),
+                thread_count,
             );
             let stats_color = if growth > 10.0 * 1_048_576.0 {
                 Color::Red
@@ -170,13 +172,16 @@ pub async fn run_tui_loop(
                     );
                     f.render_widget(msg, chunks[2]);
                 }
+                DisplayMode::Threads => {
+                    render_threads_panel(f, app, chunks[2]);
+                }
             }
 
             // ── Keybindings hint ───────────────────────────────────────────────
             let keys_text = if app.is_replay {
-                " [q]quit  [t]timeline  [h]hotspot  [Space]pause  [+/-]speed  [↑↓]scroll  [Enter]expand "
+                " [q]quit  [t]timeline  [h]hotspot  [T]threads  [Space]pause  [+/-]speed  [g]start  [G]end  [↑↓]scroll "
             } else {
-                " [q]quit  [t]timeline  [h]hotspot  [f]flamegraph  [↑↓]scroll  [Enter]expand "
+                " [q]quit  [t]timeline  [h]hotspot  [f]flamegraph  [T]threads  [↑↓]scroll  [Enter]expand "
             };
             let keys = Paragraph::new(keys_text)
             .style(Style::default().fg(Color::DarkGray));
@@ -193,4 +198,54 @@ pub async fn run_tui_loop(
     }
 
     Ok(())
+}
+
+/// Render the threads panel showing active thread IDs for the target process.
+fn render_threads_panel(
+    f: &mut ratatui::Frame,
+    app: &App,
+    area: ratatui::layout::Rect,
+) {
+    use ratatui::layout::Constraint;
+    use ratatui::style::{Color, Style};
+    use ratatui::widgets::{Block, Borders, Paragraph, Row, Table};
+
+    let block = Block::default()
+        .title(" Thread List ")
+        .borders(Borders::ALL)
+        .border_style(Theme::border());
+
+    if let Some(frame) = app.latest_frame() {
+        if frame.thread_ids.is_empty() {
+            let msg = Paragraph::new(
+                " Thread IDs not available for this recording. ",
+            )
+            .style(Style::default().fg(Color::Yellow))
+            .block(block);
+            f.render_widget(msg, area);
+        } else {
+            let rows: Vec<Row> = frame
+                .thread_ids
+                .iter()
+                .map(|tid| {
+                    let role = if *tid == app.pid { "main" } else { "worker" };
+                    Row::new(vec![format!("{}", tid), role.to_string()])
+                })
+                .collect();
+
+            let header = Row::new(vec!["TID", "Role"])
+                .style(Style::default().fg(Color::Cyan));
+
+            let widths = [Constraint::Length(10), Constraint::Min(10)];
+            let table = Table::new(rows, widths)
+                .header(header)
+                .block(block);
+            f.render_widget(table, area);
+        }
+    } else {
+        let msg = Paragraph::new(" No data yet — waiting for samples... ")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(block);
+        f.render_widget(msg, area);
+    }
 }

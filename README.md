@@ -249,16 +249,16 @@ docker run --rm --cap-add=SYS_PTRACE --security-opt seccomp:unconfined \
   allocmap-dev bash -c "rustup component add clippy && cargo clippy --workspace -- -D warnings"
 ```
 
-当前测试状态（Phase 2 Iter 01）：
+当前测试状态（Phase 2 Iter 02）：
 
 | Crate | 测试数 | 状态 |
 |-------|--------|------|
 | allocmap-core | 3 | 通过 |
 | allocmap-ptrace | 13 | 通过 |
 | allocmap-preload | 4 | 通过 |
-| allocmap-tui | 14 | 通过 |
+| allocmap-tui | 17 | 通过 |
 | allocmap-cli | 30 | 通过 |
-| **合计** | **64** | **全部通过** |
+| **合计** | **67** | **全部通过** |
 
 ### 内置测试目标程序
 
@@ -297,11 +297,18 @@ allocmap snapshot --pid $! --duration 5s
 - [x] TUI 回放状态字段（`is_replay`、`replay_speed`、`replay_paused`）
 - [x] 64 tests，全部通过，Reviewer PASSED，Tester PASSED
 
-#### Iter 02（计划中）
+#### Iter 02（✅ 已完成，2026-03-26）
 
-- [ ] `allocmap replay` Space 暂停真正中断帧推送（当前仅更新显示状态）
+- [x] `allocmap replay` Space 暂停真正中断帧流（`Arc<AtomicBool>` 共享至 feeder 任务）
+- [x] `allocmap replay` `g` 键跳转到开头，`G` 键跳转到结尾
+- [x] `SampleFrame.thread_count: u32` — 每帧记录当前线程数（multithreaded 验证：5 线程）
+- [x] `PTRACE_O_TRACECLONE` — attach 后 best-effort 启用，失败时降级不中断
+- [x] 67 tests，全部通过，Reviewer PASSED，Tester PASSED
+
+#### Iter 03（计划中）
+
+- [ ] 每线程独立 TUI 视图（`thread_count` 已采集，显示层待实现）
 - [ ] macOS `task_for_pid` 完整实现（分配热点支持）
-- [ ] 多线程视图（`PTRACE_O_TRACECLONE`，每线程独立 TUI 数据显示）
 - [ ] 火焰图视图（当前为占位符）
 - [ ] 集成测试套件
 

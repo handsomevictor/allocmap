@@ -304,4 +304,69 @@ replay 命令读取相邻帧的 `timestamp_ms` 差值来计算等待时间，并
 
 ---
 
+## Phase 2 — Iter 02（2026-03-26）
+
+### 迭代目标
+
+修复 Iter 01 遗留的 replay 暂停 bug，实现 `g`/`G` 跳转键，新增 `thread_count` 字段，并启用 `PTRACE_O_TRACECLONE`。
+
+### 构建与测试结果
+
+| 检查项 | 结果 |
+|--------|------|
+| `cargo build --release` | PASSED |
+| `cargo clippy --workspace -- -D warnings` | PASSED（0 warnings） |
+| `cargo test --workspace` | PASSED（67 tests，0 failures） |
+| Reviewer | PASSED |
+| Tester | PASSED |
+
+### 新增 / 修改的文件
+
+#### allocmap-tui（App 字段扩展）
+
+- **`crates/allocmap-tui/src/app.rs`**（修改）：
+  - 新增字段 `pause_flag: Arc<AtomicBool>`：与 feeder 任务共享，feeder 在每帧推送前检查该标志，若为 true 则等待，真正实现暂停中断帧流
+  - 新增字段 `seek_target: Arc<AtomicU64>`：feeder 读取此值以跳转到指定帧偏移
+  - 新增字段 `replay_total_ms: u64`：回放文件的总时长（毫秒），用于标题栏显示"当前时间 / 总时长"
+  - `on_key()` 新增 `g` 键（跳转到开头）和 `G` 键（跳转到结尾）的处理
+
+#### allocmap-ptrace（多线程追踪）
+
+- **`crates/allocmap-ptrace/src/sampler.rs`**（修改）：
+  - `attach()` 之后立即调用 `ptrace::setoptions(pid, PtraceOptions::PTRACE_O_TRACECLONE)`（best-effort，失败时仅 warn，不中断流程）
+  - 每次 `sample()` 调用中使用 `list_threads().len()` 填充 `SampleFrame.thread_count`
+
+#### allocmap-core（SampleFrame 字段扩展）
+
+- **`crates/allocmap-core/src/recording.rs`** / **`src/lib.rs`**（修改）：
+  - `SampleFrame` 新增字段 `thread_count: u32`，默认值 0（向后兼容旧 .amr 文件）
+  - multithreaded 测试程序验证：采样时 `thread_count` 稳定输出 5（含主线程）
+
+#### allocmap-cli（replay 命令修复）
+
+- **`crates/allocmap-cli/src/cmd/replay.rs`**（修改）：
+  - feeder 任务接收 `Arc<AtomicBool>` 引用，每帧 `sleep` 前检查暂停标志，实现真正的帧流中断
+  - feeder 任务读取 `Arc<AtomicU64>` seek_target，跳转到指定帧（`g` = 0，`G` = 末尾帧偏移）
+
+### 关键修复
+
+#### Space 键暂停真正生效（修复 Iter 01 遗留 bug）
+
+**Iter 01 问题**：`replay_paused` 标志仅更新 `App` 内部状态，feeder 任务独立运行于另一 Tokio 任务，无法感知该变量。Space 键仅改变 TUI 显示，帧流不中断。
+
+**修复**：将暂停标志从 `App` 内部 `bool` 改为 `Arc<AtomicBool>`，在创建 feeder 任务时传入同一 `Arc` 的克隆。feeder 在每帧 `tokio::time::sleep` 之前原子读取标志，若暂停则以小间隔轮询等待。
+
+### 测试结果
+
+- 总测试数：67（较 iter01 增加 3 个）
+- 新增测试覆盖：`pause_flag` 行为、`seek_target` 设置、`thread_count` 字段默认值
+
+### 验收状态
+
+- **Reviewer**: PASSED（0 clippy warnings）
+- **Tester**: PASSED（67 tests，multithreaded thread_count=5 验证通过）
+- **Phase 2 Iter 02 状态：COMPLETED ✅，进入 Iter 03**
+
+---
+
 <!-- 后续迭代记录由 Doc Agent 在每次迭代后追加 -->

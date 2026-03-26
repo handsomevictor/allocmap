@@ -1,4 +1,6 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use allocmap_core::SampleFrame;
@@ -10,6 +12,7 @@ pub enum DisplayMode {
     Timeline,
     Hotspot,
     Flamegraph,
+    Threads,
 }
 
 impl DisplayMode {
@@ -18,6 +21,7 @@ impl DisplayMode {
         match s.to_lowercase().as_str() {
             "hotspot" => DisplayMode::Hotspot,
             "flamegraph" => DisplayMode::Flamegraph,
+            "threads" => DisplayMode::Threads,
             _ => DisplayMode::Timeline,
         }
     }
@@ -44,6 +48,12 @@ pub struct App {
     pub replay_speed: f64,
     /// Whether replay is currently paused
     pub replay_paused: bool,
+    /// Shared pause flag synchronized with the feeder task
+    pub pause_flag: Option<Arc<AtomicBool>>,
+    /// Shared seek target synchronized with the feeder task (u64::MAX = no seek pending)
+    pub seek_target: Option<Arc<AtomicU64>>,
+    /// Total duration of the recording in milliseconds (for jump-to-end)
+    pub replay_total_ms: u64,
 }
 
 impl App {
@@ -62,6 +72,9 @@ impl App {
             is_replay: false,
             replay_speed: 1.0,
             replay_paused: false,
+            pause_flag: None,
+            seek_target: None,
+            replay_total_ms: 0,
         }
     }
 
@@ -153,6 +166,9 @@ impl App {
             KeyCode::Char('f') => {
                 self.mode = DisplayMode::Flamegraph;
             }
+            KeyCode::Char('T') => {
+                self.mode = DisplayMode::Threads;
+            }
             KeyCode::Down => {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
             }
@@ -168,6 +184,25 @@ impl App {
             }
             KeyCode::Char(' ') if self.is_replay => {
                 self.replay_paused = !self.replay_paused;
+                if let Some(flag) = &self.pause_flag {
+                    flag.store(self.replay_paused, Ordering::Relaxed);
+                }
+            }
+            KeyCode::Char('g') if self.is_replay => {
+                // Jump to beginning
+                if let Some(target) = &self.seek_target {
+                    target.store(0, Ordering::Release);
+                }
+                self.frames.clear();
+                self.total_samples = 0;
+            }
+            KeyCode::Char('G') if self.is_replay => {
+                // Jump to end
+                if let Some(target) = &self.seek_target {
+                    target.store(self.replay_total_ms, Ordering::Release);
+                }
+                self.frames.clear();
+                self.total_samples = 0;
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 self.replay_speed = (self.replay_speed * 2.0).min(32.0);
@@ -192,6 +227,8 @@ mod tests {
             alloc_rate: 0.0,
             free_rate: 0.0,
             top_sites: vec![],
+            thread_count: 0,
+            thread_ids: vec![],
         }
     }
 
@@ -303,6 +340,9 @@ mod tests {
         app.on_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
         assert_eq!(app.mode, DisplayMode::Flamegraph);
 
+        app.on_key(KeyEvent::new(KeyCode::Char('T'), KeyModifiers::NONE));
+        assert_eq!(app.mode, DisplayMode::Threads);
+
         app.on_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
         assert_eq!(app.mode, DisplayMode::Timeline);
     }
@@ -336,6 +376,7 @@ mod tests {
         assert_eq!(DisplayMode::parse("timeline"), DisplayMode::Timeline);
         assert_eq!(DisplayMode::parse("hotspot"), DisplayMode::Hotspot);
         assert_eq!(DisplayMode::parse("flamegraph"), DisplayMode::Flamegraph);
+        assert_eq!(DisplayMode::parse("threads"), DisplayMode::Threads);
     }
 
     #[test]
@@ -343,6 +384,14 @@ mod tests {
         assert_eq!(DisplayMode::parse("TIMELINE"), DisplayMode::Timeline);
         assert_eq!(DisplayMode::parse("HoTsPoT"), DisplayMode::Hotspot);
         assert_eq!(DisplayMode::parse("FLAMEGRAPH"), DisplayMode::Flamegraph);
+        assert_eq!(DisplayMode::parse("THREADS"), DisplayMode::Threads);
+    }
+
+    #[test]
+    fn test_display_mode_parse_threads() {
+        assert_eq!(DisplayMode::parse("threads"), DisplayMode::Threads);
+        assert_eq!(DisplayMode::parse("THREADS"), DisplayMode::Threads);
+        assert_eq!(DisplayMode::parse("Threads"), DisplayMode::Threads);
     }
 
     #[test]
@@ -350,5 +399,42 @@ mod tests {
         assert_eq!(DisplayMode::parse(""), DisplayMode::Timeline);
         assert_eq!(DisplayMode::parse("unknown"), DisplayMode::Timeline);
         assert_eq!(DisplayMode::parse("graph"), DisplayMode::Timeline);
+    }
+
+    #[test]
+    fn test_replay_pause_flag_synced_on_space() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new(1, "test".to_string(), 20);
+        app.is_replay = true;
+        let flag = Arc::new(AtomicBool::new(false));
+        app.pause_flag = Some(Arc::clone(&flag));
+        // Press Space → should set flag to true
+        app.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert!(app.replay_paused);
+        assert!(flag.load(Ordering::Relaxed));
+        // Press Space again → should clear flag
+        app.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert!(!app.replay_paused);
+        assert!(!flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_replay_seek_g_sets_target_zero() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new(1, "test".to_string(), 20);
+        app.is_replay = true;
+        app.replay_total_ms = 60_000;
+        let target = Arc::new(AtomicU64::new(u64::MAX));
+        app.seek_target = Some(Arc::clone(&target));
+        // Press g → seek to beginning (0)
+        app.on_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert_eq!(target.load(Ordering::Relaxed), 0);
+        // Press G → seek to end (total_duration)
+        app.on_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE));
+        assert_eq!(target.load(Ordering::Relaxed), 60_000);
     }
 }

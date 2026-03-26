@@ -132,6 +132,9 @@ impl PtraceAttach {
     pub fn attach(pid: u32) -> anyhow::Result<Self> {
         let nix_pid = Pid::from_raw(pid as i32);
         attach(nix_pid)?;
+        // Enable automatic tracking of newly spawned threads.
+        // Best-effort: ignore errors (e.g., not supported on older kernels).
+        let _ = ptrace::setoptions(nix_pid, ptrace::Options::PTRACE_O_TRACECLONE);
         Ok(Self { pid: nix_pid })
     }
 

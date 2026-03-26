@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// 一次采样帧：某个时间点的完整内存快照
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SampleFrame {
     /// 距录制开始的毫秒数
     pub timestamp_ms: u64,
@@ -13,6 +13,16 @@ pub struct SampleFrame {
     pub free_rate: f64,
     /// 本次采样的 top allocation sites
     pub top_sites: Vec<AllocationSite>,
+    /// Number of threads active at sample time (Linux: from /proc/PID/task/)
+    #[serde(default = "default_thread_count")]
+    pub thread_count: u32,
+    /// Thread IDs active at sample time (Linux: from /proc/PID/task/)
+    #[serde(default)]
+    pub thread_ids: Vec<u32>,
+}
+
+fn default_thread_count() -> u32 {
+    1
 }
 
 /// 一个内存分配热点

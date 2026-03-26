@@ -3,7 +3,7 @@
 > 本文档涵盖 AllocMap 的所有已实现功能，逐一介绍使用方法、参数说明、预期输出和常见问题。
 > 每次迭代后由 Doc Agent 更新，确保与实际功能完全一致。
 >
-> **当前版本**：Phase 2 Iter 01（2026-03-26）
+> **当前版本**：Phase 2 Iter 02（2026-03-26）
 
 ---
 
@@ -385,7 +385,9 @@ Options:
 
 | 键 | 功能 |
 |----|------|
-| `Space` | 暂停 / 继续回放 |
+| `Space` | 暂停 / 继续回放（真正中断帧流，Phase 2 Iter 02 修复） |
+| `g` | 跳转到录制开头（第一帧） |
+| `G` | 跳转到录制结尾（最后一帧） |
 | `+` | 加速（倍速 +0.5） |
 | `-` | 减速（倍速 -0.5，最低 0.1） |
 | `q` / `Ctrl+C` | 退出回放 |
@@ -421,10 +423,10 @@ allocmap replay leak_session.amr --speed 2.0
 allocmap replay leak_session.amr --from 20000 --to 40000 --speed 0.5
 ```
 
-### 已知限制（Phase 2 Iter 01）
+### 已知限制（Phase 2 Iter 02）
 
-- `Space` 暂停键更新 TUI 状态显示，但当前不中断帧推送（将在 iter02 修复）
-- 不支持通过键盘跳转到指定时间点（计划 iter02 以 `g` 键实现）
+- 每线程独立内存视图尚未在 TUI 中展示（`thread_count` 已采集，显示功能计划 iter03 实现）
+- macOS `task_for_pid` 完整实现尚未完成（当前 `top_sites` 在 macOS 返回空列表）
 
 ---
 

@@ -106,6 +106,8 @@ impl PtraceSampler {
             alloc_rate,
             free_rate,
             top_sites: vec![],
+            thread_count: 1,
+            thread_ids: vec![],
         })
     }
 

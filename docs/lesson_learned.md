@@ -194,4 +194,36 @@ sleep_ms = (frame[i+1].timestamp_ms - frame[i].timestamp_ms) / speed
 
 ---
 
-*最后更新：Phase 2 Iter 01（2026-03-26）*
+## Phase 2 — Iter 02（2026-03-26）
+
+### 经验：跨任务状态共享应使用 Arc<Atomic*>，而非结构体内部字段
+
+**背景**：Iter 01 中 `App.replay_paused` 被设计为普通 `bool`，Space 键切换时只更新 `App` 内部值，而 feeder 任务独立运行于另一个 `tokio::spawn` 任务，无法感知该字段的变化。
+
+**问题**：Tokio 任务之间不共享内存，两个任务只通过 `mpsc::channel` 单向通信。`App` 结构体存活于 TUI 任务中，feeder 任务持有的是独立的数据副本或无引用，导致暂停标志更新对 feeder 不可见。
+
+**修复**：将 `replay_paused` 和 `seek_target` 改为 `Arc<AtomicBool>` 和 `Arc<AtomicU64>`，在创建 feeder 任务时传入 `Arc::clone()`。feeder 在每帧推送前原子读取标志，若暂停则以短间隔轮询等待，完全绕开 channel 机制。
+
+**教训**：
+1. 在 Tokio 多任务架构中，"控制信号"（暂停、跳转、取消）与"数据流"（帧推送）是两个正交的通信方向，前者适合 `Arc<Atomic*>` 或 `watch::channel`，后者适合 `mpsc::channel`
+2. 在设计异步系统时，应在架构图上明确标注每个任务的输入和输出，防止遗漏反向控制通路
+3. `Arc<AtomicBool>` 是最轻量的跨任务布尔标志，无锁，无 await，适合高频读取的暂停/恢复场景
+
+---
+
+### 经验：PTRACE_O_TRACECLONE 应设为 best-effort
+
+**背景**：`PTRACE_O_TRACECLONE` 可让内核在目标进程调用 `clone()` 时自动通知 tracer，实现新线程的自动追踪。
+
+**问题**：并非所有内核配置和权限级别都支持 `PTRACE_O_TRACECLONE`。若将其设为必要步骤（失败则中止），会导致在某些 EC2 实例或受限容器环境中 `allocmap attach` 无法工作。
+
+**处理方式**：在 `ptrace::setoptions()` 调用后检查返回值，若失败仅记录 `warn!` 日志，继续执行后续采样逻辑。功能降级为"无自动线程追踪"，而非完全失败。
+
+**教训**：
+1. 任何"增强功能"（非核心功能）的系统调用都应设为 best-effort，失败时降级而非中止
+2. `warn!` 而非 `error!` 传达"功能受限但程序可继续"的语义，有助于用户诊断而不引起恐慌
+3. 在 Reviewer checklist 中加入"非核心系统调用是否有 best-effort 处理"一项
+
+---
+
+*最后更新：Phase 2 Iter 02（2026-03-26）*

@@ -236,6 +236,8 @@ mod tests {
                     alloc_rate: 0.0,
                     free_rate: 0.0,
                     top_sites: vec![make_site(512, "foo")],
+                    thread_count: 1,
+                    thread_ids: vec![],
                 },
                 SampleFrame {
                     timestamp_ms: 1000,
@@ -243,6 +245,8 @@ mod tests {
                     alloc_rate: 0.0,
                     free_rate: 0.0,
                     top_sites: vec![make_site(1024, "foo")],
+                    thread_count: 1,
+                    thread_ids: vec![],
                 },
             ],
             footer: RecordingFooter {

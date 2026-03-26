@@ -200,6 +200,8 @@ mod tests {
                     line: Some(42),
                 }],
             }],
+            thread_count: 1,
+            thread_ids: vec![],
         };
 
         let frame2 = SampleFrame {
@@ -208,6 +210,8 @@ mod tests {
             alloc_rate: 1024.0,
             free_rate: 256.0,
             top_sites: vec![],
+            thread_count: 1,
+            thread_ids: vec![],
         };
 
         let footer = RecordingFooter {
