@@ -47,18 +47,33 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
     let data: Vec<u64> = frames.iter().skip(skip).map(|fr| fr.live_heap_bytes).collect();
 
     let max_bytes = data.iter().copied().max().unwrap_or(1).max(1);
+    let min_bytes = data.iter().copied().min().unwrap_or(0);
+    let range = max_bytes.saturating_sub(min_bytes);
 
     // Build a sparkline-style chart using 8-level Unicode block characters.
     // Each data column is encoded as: full rows of '█' + a partial tip char (▁▂▃▄▅▆▇).
-    // This produces a proper wave shape — different heights show different characters.
+    //
+    // Y-axis uses min-max normalisation so the variance between phases is always
+    // visible on screen:
+    //   • range > 0  →  min_bytes maps to ~0, max_bytes maps to full height
+    //   • range == 0 (all values identical, e.g. holding 100 MB for 3 s)
+    //               →  bars are shown at 50% height so the chart is never
+    //                  a solid wall of █
     const BLOCKS: &[char] = &[' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
     let chart_height = height.saturating_sub(1).max(1);
     let mut rows: Vec<String> = vec![String::new(); chart_height];
 
     for &val in &data {
+        // Normalise to [0.0, 1.0]; flat signal → 0.5
+        let norm = if range == 0 {
+            0.5_f64
+        } else {
+            val.saturating_sub(min_bytes) as f64 / range as f64
+        };
+
         // height in 1/8-row sub-units
-        let full_h = ((val as f64 / max_bytes as f64) * (chart_height as f64 * 8.0)) as usize;
+        let full_h = (norm * (chart_height as f64 * 8.0)) as usize;
         let full_rows = full_h / 8;   // rows completely filled with '█'
         let frac     = (full_h % 8).min(BLOCKS.len() - 1);  // fractional tip
 

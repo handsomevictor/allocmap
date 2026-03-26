@@ -12,19 +12,35 @@ use crate::theme::Theme;
 /// that looks like user-application code rather than a libc/kernel/stdlib frame.
 /// Falls back to the first frame with any resolved name, then to the raw first frame.
 fn best_user_frame(frames: &[StackFrame]) -> Option<&StackFrame> {
-    // Skip frames whose resolved names match well-known stdlib/syscall patterns.
-    const SKIP: &[&str] = &[
+    // Patterns matched via substring — safe to use contains() because these strings
+    // don't appear as suffixes of typical user function names.
+    const SKIP_CONTAINS: &[&str] = &[
         "nanosleep", "clock_nanosleep", "clock_gettime",
         "futex", "epoll_wait", "poll", "select",
         "pthread_cond", "pthread_mutex",
         "__GI_", "__kernel_", "__libc_",
         "libc::", "std::sys", "std::thread::sleep",
-        "tokio::", "mio::", "core::", "alloc::",
+        "tokio::", "mio::",
         "malloc", "free", "calloc", "realloc",
         "clone", "sigreturn",
+        "std::rt::",  // Rust runtime bootstrap (lang_start, etc.)
     ];
 
-    let is_stdlib = |name: &str| SKIP.iter().any(|pat| name.contains(pat));
+    // Patterns matched via starts_with — avoids false positives where a user
+    // crate name ends with a stdlib prefix (e.g. `spike_alloc::` would match
+    // `alloc::` if we used contains()).
+    const SKIP_PREFIX: &[&str] = &[
+        "alloc::",  // Rust alloc crate (Vec, Box, String internals)
+        "core::",   // Rust core crate (fmt, ops, mem…)
+    ];
+
+    // Also skip library placeholder names like "<libc.so.6>", "<libgcc_s.so.1>"
+    // produced by SymbolResolver when a binary has no DWARF debug info.
+    let is_stdlib = |name: &str| {
+        SKIP_CONTAINS.iter().any(|pat| name.contains(pat))
+            || SKIP_PREFIX.iter().any(|pre| name.starts_with(pre))
+            || (name.starts_with('<') && name.ends_with('>') && name.contains(".so"))
+    };
 
     // First pass: find a resolved, non-stdlib name
     for frame in frames.iter() {
