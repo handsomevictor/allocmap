@@ -1,18 +1,79 @@
-/// allocmap-preload：LD_PRELOAD 注入库
-///
-/// # 安全警告
-/// 本 crate 编译为 .so，通过 LD_PRELOAD 注入目标进程。
-/// 在 malloc/free hook 内部，绝对不能调用标准 allocator，
-/// 否则会产生无限递归导致栈溢出。
-/// 所有内部内存分配必须通过 bump_alloc 模块。
+//! allocmap-preload: LD_PRELOAD injection library
+//!
+//! # Safety Warning
+//! This crate compiles to a `.so` injected into the target process via
+//! `LD_PRELOAD`. Inside malloc/free hooks we MUST NOT call the standard
+//! allocator — doing so causes infinite recursion and stack overflow.
+//! All internal allocations go through `bump_alloc`.
 
+pub mod bump_alloc;
 pub mod hooks;
 pub mod ipc;
-pub mod bump_alloc;
 
-/// .so 初始化入口，在库被加载时自动调用
+// Re-export AllocEvent so allocmap-cli can use the same type when reading IPC.
+pub use ipc::AllocEvent;
+
+/// Library constructor — called automatically by the dynamic linker when the
+/// `.so` is loaded into the target process (before `main`).
+///
+/// Initialises the bump allocator and IPC channel so they are ready before
+/// the first intercepted allocation occurs.
 #[no_mangle]
 pub extern "C" fn allocmap_init() {
-    // TODO: 初始化 IPC channel，连接到 allocmap-cli 进程
-    // 通过环境变量 ALLOCMAP_SOCKET_PATH 获取 socket 路径
+    bump_alloc::init();
+    ipc::init();
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bump allocator must return a valid, non-null pointer for small
+    /// allocations after initialisation.
+    #[test]
+    fn test_bump_alloc_basic() {
+        bump_alloc::init();
+        let ptr = bump_alloc::alloc(64);
+        assert!(!ptr.is_null(), "bump_alloc::alloc must return a non-null pointer");
+        assert!(
+            bump_alloc::contains(ptr),
+            "allocated pointer must be inside the bump arena"
+        );
+    }
+
+    /// A second allocation after init must also succeed.
+    #[test]
+    fn test_bump_alloc_multiple() {
+        bump_alloc::init();
+        let ptr = bump_alloc::alloc(128);
+        assert!(!ptr.is_null(), "second bump_alloc::alloc must return non-null");
+    }
+
+    /// `init()` must not panic when `ALLOCMAP_SOCKET_PATH` is unset
+    /// (i.e. the library is loaded outside allocmap supervision).
+    #[test]
+    fn test_ipc_init_no_socket() {
+        std::env::remove_var("ALLOCMAP_SOCKET_PATH");
+        ipc::init(); // must not panic or crash
+        assert!(
+            !ipc::is_connected(),
+            "IPC must not be connected when ALLOCMAP_SOCKET_PATH is absent"
+        );
+    }
+
+    /// `get_stats()` must be callable without panicking, even before any
+    /// allocations have been intercepted.
+    #[test]
+    fn test_hook_stats_initial() {
+        let stats = hooks::get_stats();
+        // We cannot assert exact counts (other tests may have run first), but
+        // the call itself must not panic.
+        let _ = stats.total_allocs;
+        let _ = stats.total_frees;
+        let _ = stats.live_bytes;
+    }
 }

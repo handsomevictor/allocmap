@@ -2,7 +2,6 @@
 ///
 /// 模拟场景：4个线程并发分配/释放内存，各自有不同的分配模式
 /// 用于验证 allocmap 能否正确追踪多线程场景
-
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;

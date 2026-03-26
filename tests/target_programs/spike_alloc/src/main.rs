@@ -7,7 +7,6 @@
 ///   ./spike_alloc                  # 默认无限循环
 ///   ./spike_alloc --cycles 3       # 循环3次后退出
 ///   ./spike_alloc --no-loop        # 只运行一次
-
 use std::time::Duration;
 
 fn main() {

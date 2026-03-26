@@ -44,10 +44,11 @@ owo-colors = "4"
 colored = "2"
 
 # 符号解析
-addr2line = "0.22"
+addr2line = { version = "0.22", features = ["object"] }
 gimli = "0.31"
-object = "0.36"
+object = { version = "0.36", features = ["read"] }
 rustc-demangle = "0.1"
+libc = "0.2"
 
 # Linux ptrace
 [workspace.dependencies.nix]

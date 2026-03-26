@@ -11,7 +11,7 @@ name = "allocmap_preload"
 
 [dependencies]
 allocmap-core = { path = "../allocmap-core" }
-anyhow = { workspace = true }
+libc = { workspace = true }
 
 # 注意：.so 内部禁止使用标准 allocator
 # 所有内部数据结构必须通过 bump_alloc 模块分配

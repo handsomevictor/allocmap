@@ -7,9 +7,9 @@ use crate::cmd::{attach, run, snapshot};
 #[command(
     name = "allocmap",
     version,
-    about = "实时内存分析工具 — 无需重启进程，直接 attach 观察内存行为",
+    about = "Real-time heap memory profiler — attach to running processes without restart",
     long_about = None,
-    after_help = "更多信息请访问：https://github.com/handsomevictor/allocmap"
+    after_help = "For more information visit: https://github.com/handsomevictor/allocmap"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -18,13 +18,13 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Attach 到正在运行的进程，实时显示内存使用情况
+    /// Attach to a running process and show live memory usage in a TUI
     Attach(attach::AttachArgs),
 
-    /// 以 LD_PRELOAD 模式启动新进程（数据更完整）
+    /// Start a new process with LD_PRELOAD instrumentation (more complete data)
     Run(run::RunArgs),
 
-    /// 非交互式快照，输出 JSON（适合 CI/CD）
+    /// Take a non-interactive snapshot and output JSON (suitable for CI/CD)
     Snapshot(snapshot::SnapshotArgs),
 }
 

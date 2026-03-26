@@ -1,17 +1,187 @@
-/// allocmap-tui：基于 ratatui 的终端 UI
+/// allocmap-tui: ratatui-based terminal UI for allocmap
 ///
-/// 颜色约定：
-/// - 绿色：正常状态（内存稳定）
-/// - 黄色：内存增长中（>1MB/s）
-/// - 红色：快速增长（>10MB/s）或可能泄漏
-/// - 青色：信息性数据（PID、程序名等）
-/// - 白色：普通文本
-
+/// Color conventions:
+/// - Green:  normal state (stable memory)
+/// - Yellow: memory growing (>1MB/s)
+/// - Red:    fast growth (>10MB/s) or likely leak
+/// - Cyan:   informational data (PID, program name, etc.)
+/// - White:  general text
 pub mod app;
+pub mod events;
+pub mod hotspot;
 pub mod theme;
 pub mod timeline;
-pub mod hotspot;
-pub mod events;
 
-pub use app::App;
+pub use app::{App, DisplayMode};
+pub use events::{poll_event, AppEvent};
 pub use theme::Theme;
+
+use std::io;
+use std::time::Duration;
+use crossterm::{
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{backend::CrosstermBackend, Terminal};
+use allocmap_core::SampleFrame;
+use tokio::sync::mpsc;
+
+/// Initialize the terminal for TUI rendering.
+pub fn init_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    Terminal::new(backend).map_err(io::Error::other)
+}
+
+/// Restore the terminal to its original state.
+pub fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()
+}
+
+/// Install a panic hook that restores the terminal before printing the panic message.
+pub fn install_panic_hook() {
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        // Best-effort terminal cleanup — ignore errors
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        original_hook(info);
+    }));
+}
+
+/// Run the TUI event loop.
+///
+/// Reads `SampleFrame`s from `rx`, updates app state, and redraws the terminal.
+/// Returns when the user presses `q` or `duration` (if set) has elapsed.
+pub async fn run_tui_loop(
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    rx: &mut mpsc::Receiver<SampleFrame>,
+    duration: Option<Duration>,
+) -> io::Result<()> {
+    use ratatui::layout::{Constraint, Direction, Layout};
+    use ratatui::style::{Color, Style};
+    use ratatui::widgets::{Block, Borders, Paragraph};
+
+    let start = std::time::Instant::now();
+
+    loop {
+        // Check duration limit
+        if let Some(dur) = duration {
+            if start.elapsed() >= dur {
+                break;
+            }
+        }
+        if app.should_quit {
+            break;
+        }
+
+        // Drain any pending frames (non-blocking)
+        while let Ok(frame) = rx.try_recv() {
+            app.push_frame(frame);
+        }
+
+        // Draw the current state
+        terminal.draw(|f| {
+            let size = f.area();
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3), // header block
+                    Constraint::Length(1), // stats bar
+                    Constraint::Min(10),   // main content
+                    Constraint::Length(1), // keybindings hint
+                ])
+                .split(size);
+
+            // ── Header ─────────────────────────────────────────────────────────
+            let elapsed = app.elapsed_secs();
+            let header_text = format!(
+                " allocmap · pid={} ({}) · {:02}:{:02}:{:02} · {} samples ",
+                app.pid,
+                app.program_name,
+                elapsed / 3600,
+                (elapsed % 3600) / 60,
+                elapsed % 60,
+                app.total_samples,
+            );
+            let header = Paragraph::new(header_text)
+                .style(Style::default().fg(Color::Cyan))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Theme::border()),
+                );
+            f.render_widget(header, chunks[0]);
+
+            // ── Stats bar ──────────────────────────────────────────────────────
+            let heap_str = timeline::format_bytes(app.current_heap_bytes());
+            let growth = app.growth_rate_bytes_per_sec();
+            let growth_str = if growth >= 0.0 {
+                format!("△ +{}/s", timeline::format_bytes(growth as u64))
+            } else {
+                format!("▽ -{}/s", timeline::format_bytes((-growth) as u64))
+            };
+            let stats_text = format!(
+                " LIVE HEAP: {}  {}  ALLOCS: {}/s  FREES: {}/s",
+                heap_str,
+                growth_str,
+                timeline::format_bytes(app.current_alloc_rate() as u64),
+                timeline::format_bytes(app.current_free_rate() as u64),
+            );
+            let stats_color = if growth > 10.0 * 1_048_576.0 {
+                Color::Red
+            } else if growth > 1_048_576.0 {
+                Color::Yellow
+            } else {
+                Color::Green
+            };
+            let stats = Paragraph::new(stats_text).style(Style::default().fg(stats_color));
+            f.render_widget(stats, chunks[1]);
+
+            // ── Main content ───────────────────────────────────────────────────
+            match app.mode {
+                DisplayMode::Timeline => {
+                    timeline::render_timeline(f, app, chunks[2]);
+                }
+                DisplayMode::Hotspot => {
+                    hotspot::render_hotspot(f, app, chunks[2]);
+                }
+                DisplayMode::Flamegraph => {
+                    let msg = Paragraph::new(
+                        " Flamegraph view: coming in a future version. Press [t] for timeline. ",
+                    )
+                    .style(Style::default().fg(Color::Yellow))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(" Flamegraph ")
+                            .border_style(Theme::border()),
+                    );
+                    f.render_widget(msg, chunks[2]);
+                }
+            }
+
+            // ── Keybindings hint ───────────────────────────────────────────────
+            let keys = Paragraph::new(
+                " [q]quit  [t]timeline  [h]hotspot  [f]flamegraph  [↑↓]scroll  [Enter]expand ",
+            )
+            .style(Style::default().fg(Color::DarkGray));
+            f.render_widget(keys, chunks[3]);
+        })?;
+
+        // Poll for a terminal event (100ms timeout)
+        if let Ok(Some(event)) = poll_event(Duration::from_millis(100)) {
+            app.on_event(event);
+        }
+
+        // Yield to the async runtime briefly to allow the sampler to produce frames
+        tokio::time::sleep(Duration::from_millis(16)).await;
+    }
+
+    Ok(())
+}

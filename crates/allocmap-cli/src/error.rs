@@ -1,10 +1,11 @@
 use owo_colors::OwoColorize;
 
-/// 打印格式化的错误信息并退出
+/// Print a formatted error message and exit with code 1.
+#[allow(dead_code)]
 pub fn print_error_and_exit(err: &anyhow::Error) -> ! {
     eprintln!("{} {}", "Error:".red().bold(), err);
 
-    // 如果有错误链，打印完整链
+    // Print the full error chain if available.
     let mut source = err.source();
     while let Some(cause) = source {
         eprintln!("  {} {}", "Caused by:".dimmed(), cause);

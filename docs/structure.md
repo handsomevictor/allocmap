@@ -9,105 +9,166 @@
 
 ```
 allocmap/
-├── Cargo.toml                          # Workspace 根配置，声明所有 crate
-├── Cargo.lock                          # 依赖锁定文件（binary 项目提交）
-├── CLAUDE.md                           # Claude Code 开发指南（项目宪法）
-├── README.md                           # 项目主页文档
-├── .gitignore                          # Git 忽略规则
+├── Cargo.toml                          # Workspace 根配置，声明所有成员 crate 及共享依赖
+├── Cargo.lock                          # 依赖锁定文件（binary 项目提交到 git）
+├── CLAUDE.md                           # Claude Code Multi-Agent 开发规范（项目宪法）
+├── README.md                           # 项目主页文档（中文，对标 pandas/pytorch 质量）
+├── .gitignore                          # Git 忽略规则（target/、*.amr 等）
+│
 ├── .cargo/
-│   └── config.toml                     # Cargo 编译配置（并行数、profile 等）
+│   └── config.toml                     # Cargo 编译配置：并行 jobs=4，dev 保留调试符号
 │
 ├── crates/
-│   ├── allocmap-core/                  # ⭐ 核心数据结构（无平台依赖）
-│   │   ├── Cargo.toml
+│   ├── allocmap-core/                  # 核心数据结构（无平台依赖，其他 crate 均依赖此 crate）
+│   │   ├── Cargo.toml                  # 依赖：serde + bincode + owo-colors
 │   │   └── src/
-│   │       ├── lib.rs                  # crate 入口，re-export 主要类型
-│   │       ├── sample.rs               # SampleFrame、AllocationSite 等数据结构
-│   │       └── recording.rs            # .amr 文件格式的读写实现
+│   │       ├── lib.rs                  # crate 入口，re-export SampleFrame、AllocationSite 等
+│   │       ├── sample.rs               # SampleFrame、AllocationSite、StackFrame 数据结构定义
+│   │       └── recording.rs            # AllocMapRecording：.amr 文件格式读写实现
+│   │                                   #   - write_to<W: Write>：写魔数 + header + frames + footer
+│   │                                   #   - read_from<R: Read>：读取并校验格式，按 frame_count 读帧
+│   │                                   #   - 3 个单元测试（roundtrip、invalid magic、version mismatch）
 │   │
-│   ├── allocmap-ptrace/                # ⭐ ptrace 采样实现（Linux only）
-│   │   ├── Cargo.toml
+│   ├── allocmap-ptrace/                # ptrace 采样实现（仅 Linux，#[cfg(target_os = "linux")]）
+│   │   ├── Cargo.toml                  # 依赖：nix（ptrace/process/signal）、addr2line、libc
+│   │   └── src/
+│   │       ├── lib.rs                  # crate 入口，compile_error! on non-Linux
+│   │       ├── attach.rs               # attach/detach/get_heap_bytes/process_exists 函数
+│   │       │                           #   - PtraceAttach RAII 包装（Drop 时自动 detach）
+│   │       │                           #   - get_heap_bytes 读 /proc/PID/status VmRSS
+│   │       │                           #   - 4 个单元测试
+│   │       ├── sampler.rs              # PtraceSampler：定频采样循环
+│   │       │                           #   - attach(pid: u32) 构建采样器
+│   │       │                           #   - sample() → SampleFrame（SIGSTOP→waitpid→读栈→PTRACE_CONT）
+│   │       │                           #   - 3 个单元测试
+│   │       ├── backtrace.rs            # 栈回溯：frame-pointer unwinding（x86_64 only）
+│   │       │                           #   - collect_backtrace(pid, max_frames) → Vec<u64>
+│   │       │                           #   - read_u64_remote（ptrace::read 读远端内存）
+│   │       │                           #   - 3 个单元测试
+│   │       └── symbols.rs              # DWARF 符号解析
+│   │                                   #   - SymbolResolver：addr2line + rustc-demangle
+│   │                                   #   - 地址到函数名缓存（BTreeMap）
+│   │                                   #   - 3 个单元测试（construction、caching、fallback）
+│   │
+│   ├── allocmap-preload/               # LD_PRELOAD 注入库，编译为 .so 动态库
+│   │   ├── Cargo.toml                  # crate-type = ["cdylib"]，依赖 libc
+│   │   └── src/
+│   │       ├── lib.rs                  # .so 入口：allocmap_init()，re-export AllocEvent
+│   │       │                           #   - 4 个单元测试
+│   │       ├── hooks.rs                # malloc/free/calloc/realloc 的 #[no_mangle] extern "C" 钩子
+│   │       │                           #   - 每线程 Cell<bool> 重入保护
+│   │       │                           #   - dlsym(RTLD_NEXT, ...) 解析原始函数
+│   │       │                           #   - LIVE_BYTES 原子计数（alloc+1，free-1）
+│   │       │                           #   - realloc bump-arena fallback 使用 min(old,new) 字节拷贝
+│   │       ├── ipc.rs                  # Unix socket IPC（.so → allocmap-cli）
+│   │       │                           #   - AllocEvent（repr(C)）：type + addr + size + ts_ms
+│   │       │                           #   - send_event()：非阻塞 try_lock + 非阻塞 socket
+│   │       └── bump_alloc.rs           # mmap 分配的 8MB bump allocator（hook 内部专用）
+│   │                                   #   - 原子 fetch_add，8 字节对齐
+│   │                                   #   - contains(ptr) 用于 free/realloc 路径判断
+│   │
+│   ├── allocmap-tui/                   # Ratatui TUI 渲染（基于 ratatui 0.28 + crossterm 0.28）
+│   │   ├── Cargo.toml                  # 依赖：ratatui、crossterm、tokio（async TUI loop）
 │   │   └── src/
 │   │       ├── lib.rs                  # crate 入口
-│   │       ├── attach.rs               # PTRACE_ATTACH / PTRACE_DETACH 逻辑
-│   │       ├── sampler.rs              # 定频采样循环（默认 50Hz）
-│   │       ├── backtrace.rs            # 从 ptrace 读取调用栈
-│   │       └── symbols.rs              # DWARF 符号解析（addr2line + rustc-demangle）
-│   │
-│   ├── allocmap-preload/               # ⭐ LD_PRELOAD .so 实现
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs                  # .so 入口，malloc/free hook
-│   │       ├── hooks.rs                # malloc/free/realloc 的替换实现
-│   │       ├── ipc.rs                  # 与 allocmap-cli 的进程间通信（Unix socket）
-│   │       └── bump_alloc.rs           # .so 内部专用分配器（避免递归）
-│   │
-│   ├── allocmap-tui/                   # ⭐ Ratatui TUI 渲染
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs                  # crate 入口
-│   │       ├── app.rs                  # TUI 应用状态管理
-│   │       ├── timeline.rs             # 内存时序折线图组件
+│   │       │                           #   - init_terminal()、restore_terminal()、install_panic_hook()
+│   │       │                           #   - async fn run_tui_loop(app, terminal, rx, duration)
+│   │       │                           #     60fps 渲染循环，从 mpsc::Receiver<SampleFrame> 消费数据
+│   │       ├── app.rs                  # App 状态管理
+│   │       │                           #   - frames: VecDeque<SampleFrame>（最多 500 帧）
+│   │       │                           #   - DisplayMode（Timeline/Hotspot/Flamegraph）
+│   │       │                           #   - on_key() 处理键盘事件（q/t/h/f/↑↓/Enter）
+│   │       ├── timeline.rs             # 内存时序图组件
+│   │       │                           #   - Unicode block-character 柱状图
+│   │       │                           #   - 颜色：绿（< 1MB/s）黄（1–10MB/s）红（> 10MB/s）
+│   │       │                           #   - format_bytes(u64) 工具函数（公开）
 │   │       ├── hotspot.rs              # 分配热点列表组件
-│   │       ├── theme.rs                # 颜色主题定义
-│   │       └── events.rs               # 键盘事件处理
+│   │       │                           #   - top-N AllocationSite 渲染
+│   │       │                           #   - 支持折叠/展开调用栈（Enter 键）
+│   │       ├── theme.rs                # 颜色主题常量（关联函数形式，Theme::xxx()）
+│   │       └── events.rs               # 键盘事件轮询
+│   │                                   #   - AppEvent enum（Key/Resize/Tick）
+│   │                                   #   - poll_event(timeout: Duration) → Option<AppEvent>
 │   │
-│   └── allocmap-cli/                   # ⭐ CLI 入口
-│       ├── Cargo.toml
+│   └── allocmap-cli/                   # CLI 入口（cargo install 安装此 crate）
+│       ├── Cargo.toml                  # 依赖：clap（derive）、tokio（full）、anyhow
 │       └── src/
-│           ├── main.rs                 # 程序入口
-│           ├── cli.rs                  # clap 命令定义
-│           ├── cmd/
-│           │   ├── attach.rs           # attach 命令实现
-│           │   ├── run.rs              # run 命令实现
-│           │   └── snapshot.rs         # snapshot 命令实现
-│           └── error.rs                # 统一错误处理和格式化
+│           ├── main.rs                 # 程序入口，tokio::main，路由到子命令
+│           ├── cli.rs                  # clap 命令定义（CLI 结构体，help 文本为英文）
+│           ├── util.rs                 # 工具函数
+│           │                           #   - parse_duration("30s"/"5m"/"1h") → Duration
+│           │                           #   - 7 个单元测试
+│           ├── error.rs                # 统一错误处理和格式化（English error messages）
+│           └── cmd/
+│               ├── attach.rs           # attach 命令实现
+│               │                       #   - 验证 /proc/{pid} 存在
+│               │                       #   - spawn_blocking 内完成 attach + 采样循环（ptrace 线程约束）
+│               │                       #   - 支持 --output（JSON）和 --record（.amr）模式
+│               ├── run.rs              # run 命令实现
+│               │                       #   - find_preload_so() 定位 liballocmap_preload.so
+│               │                       #   - 创建 Unix socket，spawn 子进程（LD_PRELOAD 注入）
+│               │                       #   - 回退到 ptrace 采样（LD_PRELOAD IPC 待 iter02 完成）
+│               └── snapshot.rs         # snapshot 命令实现
+│                                       #   - spawn_blocking 内完成 attach + 采样（ptrace 线程约束）
+│                                       #   - 输出 JSON：sample_count、peak_heap、avg_heap、top_sites
 │
 ├── tests/
-│   ├── target_programs/                # 集成测试用的目标程序
-│   │   ├── spike_alloc/                # 模拟函数级内存 surge 的程序
+│   ├── target_programs/                # 集成测试专用目标程序（每个均为独立 Cargo 项目）
+│   │   ├── spike_alloc/                # 模拟函数级内存 surge：函数A大量分配→释放→函数B大量分配
+│   │   │   ├── Cargo.toml
 │   │   │   └── src/main.rs
-│   │   ├── leak_linear/                # 模拟线性内存泄漏的程序
+│   │   ├── leak_linear/                # 线性内存泄漏模拟（每秒约 10MB）
+│   │   │   ├── Cargo.toml
 │   │   │   └── src/main.rs
-│   │   ├── steady_state/               # 稳定状态程序（验证无误报）
+│   │   ├── steady_state/               # 稳定分配释放（用于验证无误报）
+│   │   │   ├── Cargo.toml
 │   │   │   └── src/main.rs
-│   │   └── multithreaded/              # 多线程分配场景
+│   │   └── multithreaded/              # 8 线程并发分配场景
+│   │       ├── Cargo.toml
 │   │       └── src/main.rs
-│   └── integration/                    # 集成测试
-│       ├── test_attach.rs              # attach 命令的集成测试
-│       ├── test_run.rs                 # run 命令的集成测试
-│       └── test_snapshot.rs            # snapshot 命令的集成测试
+│   └── integration/                    # 集成测试（iter02 计划创建）
+│       └── (待创建)
 │
 ├── docs/
-│   ├── progress.md                     # 迭代进度记录（本文件）
-│   ├── structure.md                    # 项目架构说明
-│   ├── lesson_learned.md               # 经验教训
-│   ├── tutorial.md                     # 功能使用教程
-│   └── review_reports/                 # 验收报告（每次迭代生成）
+│   ├── progress.md                     # 迭代进度记录（每次迭代追加）
+│   ├── structure.md                    # 项目架构说明（本文件）
+│   ├── lesson_learned.md               # 经验教训（每次迭代追加）
+│   ├── tutorial.md                     # 功能使用教程（每次迭代更新）
+│   └── review_reports/                 # 验收报告（每次迭代生成一份）
 │       └── review_report_phase1_iter01.md
 │
 ├── docker/
-│   ├── Dockerfile                      # 开发镜像（rust:latest）
+│   ├── Dockerfile                      # 开发镜像（rust:latest，Debian）
+│   │                                   #   - 含 cargo-watch、基础 build 工具
+│   │                                   #   - 用于日常开发和 CI 构建
 │   ├── Dockerfile.test                 # 集成测试镜像（ubuntu:24.04）
+│   │                                   #   - 模拟真实用户环境（不含 Rust 工具链）
 │   └── docker-compose.yml              # Docker Compose 配置
+│                                       #   - cap_add: [SYS_PTRACE]
+│                                       #   - security_opt: [seccomp:unconfined]
+│                                       #   - 挂载 GITHUB_TOKEN 环境变量
 │
 └── .claude/
-    ├── agents/                         # Multi-Agent 定义
-    │   ├── orchestrator.md
-    │   ├── architect.md
-    │   ├── developer.md
-    │   ├── devops.md
-    │   ├── doc.md
-    │   ├── reviewer.md
-    │   └── tester.md
-    ├── commands/                       # Slash 命令
-    │   ├── iterate.md
-    │   ├── review.md
-    │   └── push.md
+    ├── agents/                         # Multi-Agent 角色定义文档
+    │   ├── orchestrator.md             # 总协调、任务派发、仲裁
+    │   ├── architect.md                # 系统设计、技术决策
+    │   ├── developer.md                # Rust 代码实现
+    │   ├── devops.md                   # Docker、git、CI
+    │   ├── doc.md                      # 文档更新
+    │   ├── reviewer.md                 # 代码质量审查
+    │   └── tester.md                   # 测试执行
+    ├── commands/                       # Slash 命令定义
     ├── hooks/                          # 自动化钩子
-    │   └── post-iteration.sh
     └── state/                          # 迭代状态追踪
-        └── iteration_state.json
+        ├── iteration_state.json        # 当前 phase/iter 编号和状态
+        ├── checkpoint.md               # 当前步骤快照（用于断点恢复）
+        ├── deva_report.md              # Developer A 报告（iter01）
+        ├── devb_report.md              # Developer B 报告（iter01）
+        ├── devc_report.md              # Developer C 报告（iter01）
+        ├── devd_report.md              # Developer D 报告（iter01）
+        ├── deve_report.md              # Developer E 报告（iter01）
+        ├── devops_report_iter01.md     # DevOps 报告（iter01）
+        └── doc_report_iter01.md        # Doc Agent 报告（iter01）
 ```
 
 ---
@@ -116,32 +177,52 @@ allocmap/
 
 ### allocmap-core（核心，无平台依赖）
 
-所有其他 crate 都依赖此 crate。定义了项目中所有核心数据类型：
-- `SampleFrame`：一次采样的快照数据
-- `AllocationSite`：一个分配热点（函数名 + 字节数 + 次数 + 调用栈）
-- `AllocMapRecording`：.amr 文件的完整内容
+所有其他 crate 均依赖此 crate。定义了项目中所有核心数据类型：
+
+- `SampleFrame`：一次采样的快照数据（timestamp_ms、live_heap_bytes、alloc_rate、free_rate、top_sites）
+- `AllocationSite`：一个分配热点（bytes、count、调用栈 Vec<StackFrame>）
+- `StackFrame`：调用栈中的一帧（address、function_name、file、line）
+- `AllocMapRecording`：完整的 .amr 录制文件（header + frames + footer）
 
 ### allocmap-ptrace（采样引擎，Linux only）
 
-实现 ptrace 采样循环。关键技术点：
-- 使用 `nix` crate 的 ptrace API
-- 采样时 `PTRACE_ATTACH` → 读 backtrace → `PTRACE_CONT`
-- 符号解析使用 `addr2line` crate，支持 DWARF debug info
+实现基于 ptrace 的采样循环。**关键约束**：Linux ptrace 是线程绑定的，attach 和所有后续 ptrace 操作必须在同一 OS 线程执行。AllocMap 通过将整个采样循环放在 `tokio::task::spawn_blocking` 内解决此问题。
+
+采样精度：读取 `/proc/PID/status` 的 VmRSS 字段作为 live_heap_bytes 近似值。VmRSS 包含共享库和栈，稍高于纯堆，但对趋势分析足够准确。
 
 ### allocmap-preload（注入库）
 
 编译为 `.so` 动态库，通过 `LD_PRELOAD` 注入目标进程。**关键约束**：
-- 内部不能使用 Rust 标准分配器（会导致 malloc hook 无限递归）
-- 使用自定义 `BumpAllocator` 分配内部数据结构
-- 通过 Unix Domain Socket 将数据发送给 allocmap-cli 进程
+- 钩子内部不能调用标准 allocator（会导致 malloc hook 无限递归）
+- 使用 mmap 分配的 `BumpAllocator` 作为内部数据结构的内存来源
+- 通过 Unix Domain Socket 将 `AllocEvent` 异步发送给 allocmap-cli 进程
+- 使用每线程 `Cell<bool>` 防止重入（非进程全局 AtomicBool，以避免跨线程误保护）
+
+已知限制：`LIVE_BYTES` 计数器在 free 时减去估算值（free 钩子不知道实际分配大小），计数为 best-effort。ptrace 模式的 live_heap_bytes 来自 `/proc/PID/status`，更准确。
 
 ### allocmap-tui（用户界面）
 
-基于 `ratatui` 的终端 UI。颜色约定：
-- 🟢 绿色：正常状态，内存稳定
-- 🟡 黄色：内存增长中（增速 > 1MB/s）
-- 🔴 红色：快速增长（增速 > 10MB/s）或可能泄漏
+基于 `ratatui 0.28` 的终端 UI，使用 `mpsc::Receiver<SampleFrame>` 从采样线程接收数据。
+
+布局（4 区域）：
+1. **Header block**：pid、程序名、采样时长、帧数
+2. **Stats bar**：LIVE HEAP、增速、ALLOCS/s、FREES/s
+3. **Main content**：Timeline / Hotspot / Flamegraph（按键切换）
+4. **Keybindings hint**：底部快捷键提示
+
+颜色约定：
+- 绿色：正常状态，增速 < 1 MB/s
+- 黄色：内存增长中，增速 1–10 MB/s
+- 红色：快速增长（> 10 MB/s）或可能泄漏
+
+### allocmap-cli（命令行入口）
+
+基于 `clap 4`（derive 特性）的 CLI 入口。三个子命令各自实现独立的 `execute()` async 函数。所有 user-visible error messages 均为英文，格式清晰：
+```
+Error: Process 99999 not found. Make sure the PID is correct and the process is running.
+Error: Invalid duration 'xyz': expected format like 30s, 5m, 1h
+```
 
 ---
 
-*最后更新：项目初始化*
+*最后更新：Phase 1 Iter 01（2026-03-26）*

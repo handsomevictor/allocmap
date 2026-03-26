@@ -10,3 +10,4 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 anyhow = { workspace = true }
 owo-colors = { workspace = true }
+tokio = { workspace = true }

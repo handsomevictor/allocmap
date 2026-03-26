@@ -1,6 +1,7 @@
 mod cli;
 mod cmd;
 mod error;
+mod util;
 
 use anyhow::Result;
 use cli::Cli;

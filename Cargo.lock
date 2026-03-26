@@ -60,7 +60,7 @@ name = "allocmap-preload"
 version = "0.1.0"
 dependencies = [
  "allocmap-core",
- "anyhow",
+ "libc",
 ]
 
 [[package]]
@@ -71,6 +71,7 @@ dependencies = [
  "allocmap-core",
  "anyhow",
  "gimli 0.31.1",
+ "libc",
  "nix",
  "object 0.36.7",
  "rustc-demangle",
@@ -88,6 +89,7 @@ dependencies = [
  "crossterm",
  "owo-colors",
  "ratatui",
+ "tokio",
 ]
 
 [[package]]
