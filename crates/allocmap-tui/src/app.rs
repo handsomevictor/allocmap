@@ -74,6 +74,9 @@ pub struct App {
     pub bucket_start_ms: Option<u64>,
     /// All-time peak heap bytes
     pub peak_heap_bytes: u64,
+    /// Locked Y-axis maximum: only ever grows, never shrinks.
+    /// Used by the timeline chart so historical bars never rescale downward.
+    pub y_axis_max: u64,
 }
 
 impl App {
@@ -100,6 +103,7 @@ impl App {
             bucket_count: 0,
             bucket_start_ms: None,
             peak_heap_bytes: 0,
+            y_axis_max: 0,
         }
     }
 
@@ -112,9 +116,12 @@ impl App {
 
     /// Add a new sample frame to the app state
     pub fn push_frame(&mut self, frame: SampleFrame) {
-        // Track all-time peak
+        // Track all-time peak and locked Y-axis max (never shrinks)
         if frame.live_heap_bytes > self.peak_heap_bytes {
             self.peak_heap_bytes = frame.live_heap_bytes;
+        }
+        if frame.live_heap_bytes > self.y_axis_max {
+            self.y_axis_max = frame.live_heap_bytes;
         }
 
         // Aggregate into 5-second timeline columns

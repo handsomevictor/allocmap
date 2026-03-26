@@ -10,7 +10,11 @@ use crate::app::App;
 use crate::theme::Theme;
 use crate::timeline::format_bytes;
 
-// ── stdlib filter (same logic as before, prevents false-positives) ──────────
+// ── stdlib filter ────────────────────────────────────────────────────────────
+// SKIP_CONTAINS: matched via name.contains()  — safe because these strings
+//   do not appear as substrings of legitimate user-code identifiers.
+// SKIP_PREFIX:  matched via name.starts_with() — must NOT use contains() for
+//   these because e.g. "alloc::" appears inside "spike_alloc::..." as a suffix.
 
 const SKIP_CONTAINS: &[&str] = &[
     "nanosleep", "clock_nanosleep", "clock_gettime",
@@ -68,6 +72,69 @@ fn truncate(s: &str, max_chars: usize) -> String {
     }
 }
 
+/// Format file:line from a StackFrame.
+/// Shows the last two path components to keep it compact.
+/// Returns "<system>" for frames with no file info.
+fn format_file_line(frame: &StackFrame) -> String {
+    match (&frame.file, frame.line) {
+        (Some(file), Some(line)) => {
+            let path = std::path::Path::new(file.as_str());
+            let components: Vec<_> = path.components().collect();
+            let short = if components.len() >= 2 {
+                let parent = components[components.len() - 2]
+                    .as_os_str().to_str().unwrap_or("?");
+                let name = components[components.len() - 1]
+                    .as_os_str().to_str().unwrap_or("?");
+                format!("{}/{}", parent, name)
+            } else {
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(file.as_str())
+                    .to_string()
+            };
+            format!("{}:{}", short, line)
+        }
+        _ => "<system>".to_string(),
+    }
+}
+
+/// Detect the source language from a StackFrame.
+/// Returns (short label, color).
+fn detect_lang(frame: &StackFrame) -> (&'static str, Color) {
+    // File extension is the most reliable indicator
+    if let Some(ref file) = frame.file {
+        if file.ends_with(".rs") {
+            return ("Rust", Color::Rgb(255, 165, 0)); // orange
+        }
+        if file.ends_with(".cpp") || file.ends_with(".cc") || file.ends_with(".cxx") {
+            return ("C++", Color::Blue);
+        }
+        if file.ends_with(".py") {
+            return ("Py", Color::Yellow);
+        }
+        if file.contains("libpython") || file.contains("python") {
+            return ("Py", Color::Yellow);
+        }
+        if file.contains("libjvm") {
+            return ("Java", Color::Rgb(100, 149, 237)); // cornflower blue
+        }
+    }
+    // Fall back to function name mangling heuristics
+    if let Some(ref func) = frame.function {
+        if func.starts_with("_Z") {
+            return ("C++", Color::Blue);
+        }
+        // Rust names contain "::" and often "<T as Trait>" patterns
+        if func.contains("::") && !func.starts_with('<') {
+            return ("Rust", Color::Rgb(255, 165, 0));
+        }
+        if func.contains("PyEval") || func.contains("Py_") {
+            return ("Py", Color::Yellow);
+        }
+    }
+    ("C", Color::White)
+}
+
 /// Scan the recent frame history to find the peak live_bytes for a site
 /// identified by its best-user-frame function name.
 fn peak_for_site(name: &str, app: &App) -> u64 {
@@ -85,24 +152,21 @@ fn peak_for_site(name: &str, app: &App) -> u64 {
             .unwrap_or(0))
 }
 
-/// Return Trend: +1 = rising, -1 = falling, 0 = stable
-fn trend_for_site(name: &str, current_live: u64, app: &App) -> i8 {
-    let lookback = app.frames.len().min(250);
-    let old_frame = app.frames.get(app.frames.len().saturating_sub(lookback));
-    let old_live = old_frame
-        .and_then(|f| f.top_sites.iter()
-            .find(|s| best_user_name(&s.frames) == name)
-            .map(|s| s.live_bytes))
-        .unwrap_or(0);
-
-    let threshold = (current_live / 20).max(1); // 5% change threshold
-    if current_live > old_live + threshold {
-        1
-    } else if old_live > current_live + threshold {
-        -1
-    } else {
-        0
+/// Compute the live-bytes delta vs the previous sample frame for a given site.
+/// Positive = grew, negative = shrank, 0 = unchanged / not seen before.
+fn delta_for_site(name: &str, current_live: u64, app: &App) -> i64 {
+    let n = app.frames.len();
+    if n < 2 {
+        return 0;
     }
+    let prev_frame = &app.frames[n - 2];
+    let prev_live = prev_frame
+        .top_sites
+        .iter()
+        .find(|s| best_user_name(&s.frames) == name)
+        .map(|s| s.live_bytes)
+        .unwrap_or(0);
+    current_live as i64 - prev_live as i64
 }
 
 /// Build a mini bar for the Live% column: 8 █/░ chars + " XX.X%"
@@ -157,11 +221,13 @@ pub fn render_hotspot(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Theme::border());
 
-    // ── Header row ────────────────────────────────────────────────────────────
-    // Cols: #(3) func(36) live(9) live%(14) peak(9) alloc(6) avgSz(9) trend(2)
+    // ── Column layout ─────────────────────────────────────────────────────────
+    // # (3)  Function (22)  File:Line (16)  Lang (4)
+    // Live (8)  Live% (13)  Peak (7)  Delta (8)  AvgSz (7)
+    // Total with separating spaces ≈ 100 chars (fits 110+ terminal width)
     let header_text = format!(
-        "{:>3} {:<36} {:>9} {:<14} {:>9} {:>6} {:>9} {:>2}",
-        "#", "Function", "Live", "Live%", "Peak", "Alloc", "AvgSz", "T",
+        "{:>3} {:<22} {:<16} {:>4} {:>8} {:<13} {:>7} {:>9} {:>7}",
+        "#", "Function", "File:Line", "Lang", "Live", "Live%", "Peak", "Delta", "AvgSz",
     );
     let header_line = Line::from(vec![
         Span::styled(header_text, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
@@ -170,29 +236,44 @@ pub fn render_hotspot(f: &mut Frame, app: &App, area: Rect) {
     let mut items: Vec<ListItem> = vec![ListItem::new(header_line)];
 
     // ── Data rows ─────────────────────────────────────────────────────────────
-    // display_idx tracks position in the rendered list (for scroll_offset).
-    // site_idx is the original rank index (for coloring and expansion state).
     for (display_idx, (site_idx, site)) in sites.iter().enumerate().take(app.top_n).enumerate() {
         let name = best_user_name(&site.frames);
 
         let live_mb  = site.live_bytes as f64 / 1_048_576.0;
         let pct      = site.live_bytes as f64 / total_live as f64 * 100.0;
         let peak     = peak_for_site(&name, app).max(site.peak_bytes);
-        let alloc    = site.alloc_count;
-        let avg_sz   = if alloc > 0 { site.live_bytes / alloc } else { site.live_bytes };
-        let trend    = trend_for_site(&name, site.live_bytes, app);
-
-        let func_str = truncate(&name, 36);
-        let live_str = format!("{:>9}", format!("{:.1}MB", live_mb));
-        let bar_str  = live_pct_bar(pct);
-        let peak_str = format!("{:>9}", format_bytes(peak));
-        let alloc_str = format!("{:>6}", alloc);
-        let avg_sz_str = format!("{:>9}", format_bytes(avg_sz));
-        let (trend_ch, trend_color) = match trend {
-            1  => ("↑", Color::Red),
-            -1 => ("↓", Color::Green),
-            _  => ("→", Color::White),
+        let avg_sz   = {
+            let alloc = site.alloc_count.max(1);
+            site.live_bytes / alloc
         };
+        let delta    = delta_for_site(&name, site.live_bytes, app);
+
+        // File:Line + Lang come from the best user frame
+        let (file_line_str, lang_label, lang_color) =
+            if let Some(frame) = best_user_frame(&site.frames) {
+                let fl = format_file_line(frame);
+                let (lang, lc) = detect_lang(frame);
+                (fl, lang, lc)
+            } else {
+                ("<unknown>".to_string(), "C", Color::White)
+            };
+
+        let func_str      = truncate(&name, 22);
+        let file_line_col = truncate(&file_line_str, 16);
+        let live_str      = format!("{:>8}", format!("{:.1}MB", live_mb));
+        let bar_str       = live_pct_bar(pct);
+        let peak_str      = format!("{:>7}", format_bytes(peak));
+        let delta_str     = if delta > 0 {
+            format!("{:>+9}", format!("+{}", format_bytes(delta as u64)))
+        } else if delta < 0 {
+            format!("{:>9}", format!("-{}", format_bytes((-delta) as u64)))
+        } else {
+            format!("{:>9}", "0")
+        };
+        let avg_sz_str    = format!("{:>7}", format_bytes(avg_sz));
+        let delta_color   = if delta > 0 { Color::Red }
+            else if delta < 0 { Color::Green }
+            else { Color::White };
 
         let is_selected = display_idx == app.scroll_offset;
         let row_style = if is_selected {
@@ -208,19 +289,21 @@ pub fn render_hotspot(f: &mut Frame, app: &App, area: Rect) {
         let bar_color = pct_color(pct);
         let line = Line::from(vec![
             Span::styled(format!("{:>3} ", site_idx + 1), Theme::dimmed()),
-            Span::styled(func_str, row_style),
-            Span::styled(" ", Style::default()),
-            Span::styled(live_str, row_style),
-            Span::styled(" ", Style::default()),
-            Span::styled(bar_str, Style::default().fg(bar_color)),
-            Span::styled(" ", Style::default()),
-            Span::styled(peak_str, Theme::dimmed()),
-            Span::styled(" ", Style::default()),
-            Span::styled(alloc_str, Theme::dimmed()),
-            Span::styled(" ", Style::default()),
-            Span::styled(avg_sz_str, Theme::dimmed()),
-            Span::styled(" ", Style::default()),
-            Span::styled(format!("{:>2}", trend_ch), Style::default().fg(trend_color)),
+            Span::styled(func_str,      row_style),
+            Span::styled(" ",           Style::default()),
+            Span::styled(file_line_col, Theme::dimmed()),
+            Span::styled(" ",           Style::default()),
+            Span::styled(format!("{:>4}", lang_label), Style::default().fg(lang_color)),
+            Span::styled(" ",           Style::default()),
+            Span::styled(live_str,      row_style),
+            Span::styled(" ",           Style::default()),
+            Span::styled(bar_str,       Style::default().fg(bar_color)),
+            Span::styled(" ",           Style::default()),
+            Span::styled(peak_str,      Theme::dimmed()),
+            Span::styled(" ",           Style::default()),
+            Span::styled(delta_str,     Style::default().fg(delta_color)),
+            Span::styled(" ",           Style::default()),
+            Span::styled(avg_sz_str,    Theme::dimmed()),
         ]);
         items.push(ListItem::new(line));
 
@@ -233,10 +316,10 @@ pub fn render_hotspot(f: &mut Frame, app: &App, area: Rect) {
                 let fname = frame.function.as_deref().unwrap_or("0x???");
                 let loc = match (&frame.file, frame.line) {
                     (Some(file), Some(line)) => {
-                        let short = std::path::Path::new(file)
+                        let short = std::path::Path::new(file.as_str())
                             .file_name()
                             .and_then(|n| n.to_str())
-                            .unwrap_or(file);
+                            .unwrap_or(file.as_str());
                         format!(" ({short}:{line})")
                     }
                     _ => String::new(),

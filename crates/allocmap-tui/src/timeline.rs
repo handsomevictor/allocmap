@@ -24,12 +24,23 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
-/// Color for a bar based on its absolute heap as % of the global max
-fn bar_color(heap: u64, global_max: u64) -> Color {
-    if global_max == 0 {
+/// Format milliseconds as a compact time string
+fn format_ms(ms: u64) -> String {
+    if ms >= 3_600_000 {
+        format!("{}h{}m", ms / 3_600_000, (ms % 3_600_000) / 60_000)
+    } else if ms >= 60_000 {
+        format!("{}m{}s", ms / 60_000, (ms % 60_000) / 1_000)
+    } else {
+        format!("{}s", ms / 1_000)
+    }
+}
+
+/// Color for a bar based on its absolute heap as % of the locked Y-axis max
+fn bar_color(heap: u64, y_max: u64) -> Color {
+    if y_max == 0 {
         return Color::Green;
     }
-    let pct = heap * 100 / global_max;
+    let pct = heap * 100 / y_max;
     if pct > 80 {
         Color::Red
     } else if pct > 50 {
@@ -41,15 +52,15 @@ fn bar_color(heap: u64, global_max: u64) -> Color {
 
 /// Compute the Y-axis label for a given chart row.
 /// Returns a 9-character string (right-padded / right-aligned).
-fn y_label(row: usize, chart_height: usize, global_max: u64) -> String {
+fn y_label(row: usize, chart_height: usize, y_max: u64) -> String {
     let is_top = row == 0;
     let is_mid = row == chart_height / 2;
     let is_bot = row == chart_height.saturating_sub(1);
 
     let (val, corner) = if is_top {
-        (global_max, '┤')
+        (y_max, '┤')
     } else if is_mid && chart_height > 2 {
-        (global_max / 2, '┤')
+        (y_max / 2, '┤')
     } else if is_bot {
         (0, '┴')
     } else {
@@ -109,17 +120,17 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
     let col_heaps: Vec<u64> = all_heaps[skip..].to_vec();
     let col_ms: Vec<u64>    = all_end_ms[skip..].to_vec();
 
-    let global_max = col_heaps.iter().copied().max().unwrap_or(1).max(1);
-    let global_min = col_heaps.iter().copied().min().unwrap_or(0);
-    let range = global_max.saturating_sub(global_min);
+    // Use the locked Y-axis max — only ever grows, so historical bars never rescale downward.
+    // If no data has been seen yet, fall back to 1 to avoid division by zero.
+    let y_max = app.y_axis_max.max(1);
 
     // ── Build chart rows ─────────────────────────────────────────────────────
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(chart_height + 2);
 
     for row in 0..chart_height {
-        let row_from_bottom = chart_height.saturating_sub(1) - row; // 0=bottom, top=max
+        let row_from_bottom = chart_height.saturating_sub(1) - row; // 0=bottom
 
-        let ylabel = y_label(row, chart_height, global_max);
+        let ylabel = y_label(row, chart_height, y_max);
         let mut spans: Vec<Span<'static>> = vec![Span::raw(ylabel)];
 
         // Group consecutive columns with the same color into one span
@@ -137,13 +148,11 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
         for maybe_heap in &padded {
             let heap = maybe_heap.unwrap_or(0);
 
-            // Normalise heap → bar height in 1/8-row sub-units
-            let norm: f64 = if range == 0 {
-                0.5
-            } else {
-                heap.saturating_sub(global_min) as f64 / range as f64
-            };
-            let full_h  = (norm * (chart_height as f64 * 8.0)) as usize;
+            // Absolute bar height: heap / y_max mapped to chart_height rows (8 sub-units each).
+            // Because y_max only grows, bar heights can only decrease or stay the same over time —
+            // historical bars never jump upward, eliminating the flickering / rescaling bug.
+            let norm: f64 = heap as f64 / y_max as f64;
+            let full_h    = (norm * (chart_height as f64 * 8.0)) as usize;
             let full_rows = full_h / 8;
             let frac      = (full_h % 8).min(BLOCKS.len() - 1);
 
@@ -157,7 +166,7 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
                 ' '
             };
 
-            let color = if maybe_heap.is_some() { bar_color(heap, global_max) } else { Color::DarkGray };
+            let color = if maybe_heap.is_some() { bar_color(heap, y_max) } else { Color::DarkGray };
 
             if first || color != group_col {
                 if !first {
@@ -181,43 +190,33 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
     }
 
     // ── X-axis ruler + time labels ───────────────────────────────────────────
-    // Build a ruler string: "         └" + "─" * chart_cols
-    // Then overlay time labels every 6 columns (30 s) measured from right
     let ruler_prefix = format!("{:width$}└", "", width = Y_LABEL_WIDTH - 1);
     let mut ruler_chars: Vec<char> = "─".repeat(chart_cols).chars().collect();
 
-    // Time labels: position from right, every 6 columns = 30s
-    let latest_ms = col_ms.last().copied().unwrap_or(0);
+    // Choose label step based on how many columns are visible.
+    // Each column = 5 s; we want labels roughly every 30–60 s apart.
     let n_cols = col_heaps.len();
-    let mut label_positions: Vec<(usize, String)> = Vec::new();
-    let mut secs_back = 0u64;
-    loop {
-        let cols_back = (secs_back / 5) as usize;
-        if cols_back >= chart_cols { break; }
-        // Position from left in the ruler
-        let pos_from_left = chart_cols.saturating_sub(1 + cols_back);
-        let absolute_ms = latest_ms.saturating_sub(secs_back * 1000);
-        let label = if absolute_ms < latest_ms {
-            format!("{}s", latest_ms.saturating_sub(absolute_ms) / 1000)
-        } else {
-            format!("{}s", app.elapsed_secs())
-        };
-        label_positions.push((pos_from_left, label));
-        if secs_back == 0 {
-            secs_back = 30;
-        } else {
-            secs_back += 30;
-        }
-        if secs_back > 3600 { break; }
-    }
+    let label_step = if n_cols <= 12 { 1 }        // ≤60 s: label every 5 s
+        else if n_cols <= 30 { 3 }                 // ≤150 s: every 15 s
+        else if n_cols <= 60 { 6 }                 // ≤300 s: every 30 s
+        else { 12 };                               // >300 s: every 60 s
 
-    // Write labels into ruler_chars
-    for (pos, label) in &label_positions {
-        for (i, ch) in label.chars().enumerate() {
-            let idx = pos + i;
-            if idx < ruler_chars.len() {
-                ruler_chars[idx] = ch;
+    // Write time labels using the actual end_ms timestamp of each labeled column.
+    // This ensures labels show true elapsed time (e.g. "0s 30s 60s") rather than
+    // repeating the same value or counting from the wrong reference point.
+    let mut last_label_end = 0usize;
+    for i in (0..n_cols).step_by(label_step) {
+        let ms = col_ms.get(i).copied().unwrap_or(0);
+        let label = format_ms(ms);
+        // Avoid overwriting a recently written label
+        if i >= last_label_end || i == 0 {
+            for (j, ch) in label.chars().enumerate() {
+                let idx = i + j;
+                if idx < ruler_chars.len() {
+                    ruler_chars[idx] = ch;
+                }
             }
+            last_label_end = i + label.len() + 1; // +1 gap
         }
     }
 
@@ -235,7 +234,7 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
     let label = format!(
         "{:width$}max={}  current={}  growth={}{}/s  samples={}  cols={}×5s",
         "",
-        format_bytes(global_max),
+        format_bytes(y_max),
         format_bytes(latest_heap),
         sign,
         format_bytes(growth.abs() as u64),
