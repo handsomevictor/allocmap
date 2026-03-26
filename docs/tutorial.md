@@ -3,7 +3,7 @@
 > 本文档涵盖 AllocMap 的所有已实现功能，逐一介绍使用方法、参数说明、预期输出和常见问题。
 > 每次迭代后由 Doc Agent 更新，确保与实际功能完全一致。
 >
-> **当前版本**：Phase 2 Iter 02（2026-03-26）
+> **当前版本**：Phase 2 Iter 03（2026-03-26）— Phase 2 COMPLETED ✅
 
 ---
 
@@ -423,10 +423,10 @@ allocmap replay leak_session.amr --speed 2.0
 allocmap replay leak_session.amr --from 20000 --to 40000 --speed 0.5
 ```
 
-### 已知限制（Phase 2 Iter 02）
+### 已知限制
 
-- 每线程独立内存视图尚未在 TUI 中展示（`thread_count` 已采集，显示功能计划 iter03 实现）
-- macOS `task_for_pid` 完整实现尚未完成（当前 `top_sites` 在 macOS 返回空列表）
+- macOS `task_for_pid` 完整实现尚未完成（当前 `top_sites` 在 macOS 返回空列表，基础 RSS 监控可用）
+- 火焰图视图当前为占位符（显示提示文字，待后续版本实现）
 
 ---
 
@@ -606,6 +606,7 @@ kill $STEADY_PID
 MT_PID=$!
 
 allocmap attach --pid $MT_PID --duration 20s
+# TUI 中按 T 键可切换到线程列表视图，观察活跃线程数（约 5 个：主线程 + 4 工作线程）
 
 kill $MT_PID
 ```
@@ -648,15 +649,17 @@ allocmap run --record session.amr -- ./my_binary
 
 ```
 ┌─ allocmap · pid=<PID> (<PROGRAM>) · <ELAPSED> · <N> samples ─────────┐
-│ LIVE HEAP: <SIZE>  △ <RATE>/s  ALLOCS: <N>/s  FREES: <N>/s           │  ← Stats Bar
+│ LIVE HEAP: <SIZE>  △ <RATE>/s  ALLOCS: <N>/s  FREES: <N>/s  THREADS: <N>  │  ← Stats Bar
 ├───────────────────────────────────────────────────────────────────────┤
 │                                                                       │
-│  [时序图 / 热点列表 / 火焰图（占位符）]                                  │  ← Main Content
+│  [时序图 / 热点列表 / 火焰图（占位符）/ 线程列表]                         │  ← Main Content
 │                                                                       │
 ├───────────────────────────────────────────────────────────────────────┤
-│ [q]退出  [t]时间轴  [h]热点  [f]火焰图  [↑↓]滚动  [Enter]展开/折叠       │  ← Keybindings
+│ [q]退出  [t]时间轴  [h]热点  [f]火焰图  [T]线程  [↑↓]滚动  [Enter]展开/折叠  │  ← Keybindings
 └───────────────────────────────────────────────────────────────────────┘
 ```
+
+Stats bar 中的 `THREADS: N` 始终显示当前采样帧的活跃线程数，无论当前处于哪种视图。
 
 ### 键盘快捷键
 
@@ -665,7 +668,8 @@ allocmap run --record session.amr -- ./my_binary
 | `q` / `Ctrl+C` | 退出 AllocMap |
 | `t` | 切换到时序图视图（Timeline） |
 | `h` | 切换到热点列表视图（Hotspot） |
-| `f` | 切换到火焰图视图（Phase 1 为占位符） |
+| `f` | 切换到火焰图视图（占位符） |
+| `T` | 切换到线程列表视图（Threads，Phase 2 Iter 03 新增） |
 | `↑` / `↓` | 在热点列表中滚动 |
 | `Enter` | 展开/折叠选中热点的调用栈 |
 
@@ -696,6 +700,35 @@ allocmap run --record session.amr -- ./my_binary
 - `>` 表示当前选中行
 - 按 `Enter` 展开/折叠调用栈
 - 如无调试符号，函数名显示为 ELF 文件名或内存地址
+
+### 线程列表视图（Phase 2 Iter 03 新增，`T` 键切换）
+
+展示当前采样帧的所有活跃线程：
+
+```
+┌─ Threads ───────────────────────────────────────────────────┐
+│  TID     Role                                               │
+│  ───────────────────────────────────────────────────────    │
+│  7       main                                               │
+│  8       worker                                             │
+│  9       worker                                             │
+│  11      worker                                             │
+│  12      worker                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+- `TID` 列显示 Linux 线程 ID（来自 `/proc/PID/task/`）
+- `Role` 列：最小 TID 的线程标记为 `main`，其余标记为 `worker`
+- 数据来源：`SampleFrame.thread_ids`（每次采样时由 sampler 填充）
+- 多线程程序示例：`multithreaded` 测试目标程序运行时可观察到 5 个线程（1 个主线程 + 4 个工作线程）
+
+```bash
+# 验证多线程追踪
+./tests/target_programs/multithreaded/target/debug/multithreaded &
+MT_PID=$!
+allocmap attach --pid $MT_PID  # 按 T 键切换到线程视图
+kill $MT_PID
+```
 
 ---
 

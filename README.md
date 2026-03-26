@@ -31,6 +31,7 @@ allocmap attach --pid $(pidof my_service)
 - **非交互快照**：`snapshot` 命令输出 JSON 格式报告，天然兼容 CI/CD 流水线
 - **录制与回放**：将采样数据录制为 `.amr` 文件，`allocmap replay` 支持变速播放、时间范围裁剪、Space 暂停
 - **版本 Diff 对比**：`allocmap diff` 逐函数对比两个录制文件，颜色标注变化幅度，快速定位内存回归
+- **多线程追踪与视图**：自动追踪目标进程所有线程，TUI 按 `T` 键切换线程列表视图，展示每个线程 TID 与角色
 - **macOS 支持**（实验性）：`allocmap run` 使用 `DYLD_INSERT_LIBRARIES` 注入，基础 RSS 监控已可用
 
 ## 与同类工具对比
@@ -147,7 +148,7 @@ allocmap snapshot --pid 1234 --duration 10s --output snapshot.json
 │   └─ std::collections::HashMap::insert  32.1MB   11,058            │
 │ > parser::parse_chunk                    22.3MB    8,432   →        │
 ╰──────────────────────────────────────────────────────────────────────╯
-[q]退出  [t]时间轴  [h]热点  [f]火焰图  [↑↓]滚动  [Enter]展开/折叠
+[q]退出  [t]时间轴  [h]热点  [f]火焰图  [T]线程  [↑↓]滚动  [Enter]展开/折叠
 ```
 
 颜色含义：
@@ -249,16 +250,16 @@ docker run --rm --cap-add=SYS_PTRACE --security-opt seccomp:unconfined \
   allocmap-dev bash -c "rustup component add clippy && cargo clippy --workspace -- -D warnings"
 ```
 
-当前测试状态（Phase 2 Iter 02）：
+当前测试状态（Phase 2 Iter 03 — COMPLETED）：
 
 | Crate | 测试数 | 状态 |
 |-------|--------|------|
 | allocmap-core | 3 | 通过 |
 | allocmap-ptrace | 13 | 通过 |
 | allocmap-preload | 4 | 通过 |
-| allocmap-tui | 17 | 通过 |
+| allocmap-tui | 18 | 通过 |
 | allocmap-cli | 30 | 通过 |
-| **合计** | **67** | **全部通过** |
+| **合计** | **68** | **全部通过** |
 
 ### 内置测试目标程序
 
@@ -274,7 +275,7 @@ allocmap snapshot --pid $! --duration 5s
 
 ## 路线图
 
-### Phase 1 — Linux 核心功能（✅ 已完成，iter02，2026-03-26）
+### Phase 1 — Linux 核心功能 ✅ COMPLETED（2026-03-26，iter02）
 
 - [x] `allocmap attach` — ptrace 模式实时监控，TUI 界面
 - [x] `allocmap run` — LD_PRELOAD 模式，支持 `--env` 注入，`--mode` 选项
@@ -286,31 +287,22 @@ allocmap snapshot --pid $! --duration 5s
 - [x] 完整测试覆盖（55 tests，全部通过）
 - [x] Reviewer PASSED，Tester PASSED（snapshot 146 frames, peak 2.1MB）
 
-### Phase 2 — 完整产品（🚧 进行中）
+### Phase 2 — 完整产品 ✅ COMPLETED（2026-03-26，iter03）
 
-#### Iter 01（✅ 已完成，2026-03-26）
+- [x] `allocmap replay` — `.amr` 文件回放，支持 `--from`/`--to`/`--speed`，Space 真正暂停，+/- 变速，g/G 跳转 ✅
+- [x] `allocmap diff` — 两个录制文件的逐函数对比，颜色标注变化幅度，`--min-change-pct` 过滤 ✅
+- [x] macOS 支持（`DYLD_INSERT_LIBRARIES` 注入，基础 RSS 监控）✅
+- [x] 多线程追踪（`PTRACE_O_TRACECLONE` best-effort，`list_threads()` 枚举，`thread_count` 字段）✅
+- [x] 多线程 TUI 视图（`thread_ids: Vec<u32>`，`T` 键切换线程列表面板）✅
+- [x] 68 tests，全部通过，Reviewer PASSED，Tester PASSED
 
-- [x] `allocmap replay` — `.amr` 文件回放，支持 `--from`/`--to`/`--speed`，Space 暂停，+/- 变速
-- [x] `allocmap diff` — 两个录制文件的逐函数对比，颜色标注变化幅度，`--min-change-pct` 过滤
-- [x] macOS 基础支持：`DYLD_INSERT_LIBRARIES` 注入，`ps -o rss=` RSS 监控
-- [x] 多线程枚举框架：`list_threads()` 读取 `/proc/PID/task/`
-- [x] TUI 回放状态字段（`is_replay`、`replay_speed`、`replay_paused`）
-- [x] 64 tests，全部通过，Reviewer PASSED，Tester PASSED
+#### 各迭代详情
 
-#### Iter 02（✅ 已完成，2026-03-26）
-
-- [x] `allocmap replay` Space 暂停真正中断帧流（`Arc<AtomicBool>` 共享至 feeder 任务）
-- [x] `allocmap replay` `g` 键跳转到开头，`G` 键跳转到结尾
-- [x] `SampleFrame.thread_count: u32` — 每帧记录当前线程数（multithreaded 验证：5 线程）
-- [x] `PTRACE_O_TRACECLONE` — attach 后 best-effort 启用，失败时降级不中断
-- [x] 67 tests，全部通过，Reviewer PASSED，Tester PASSED
-
-#### Iter 03（计划中）
-
-- [ ] 每线程独立 TUI 视图（`thread_count` 已采集，显示层待实现）
-- [ ] macOS `task_for_pid` 完整实现（分配热点支持）
-- [ ] 火焰图视图（当前为占位符）
-- [ ] 集成测试套件
+| 迭代 | 主要内容 | 测试数 | 状态 |
+|------|---------|--------|------|
+| Iter 01 | replay + diff + macOS 基础 + 多线程枚举框架 | 64 | ✅ |
+| Iter 02 | Space 暂停修复 + g/G 跳转 + thread_count + PTRACE_O_TRACECLONE | 67 | ✅ |
+| Iter 03 | thread_ids + DisplayMode::Threads + render_threads_panel() | 68 | ✅ |
 
 ## License
 

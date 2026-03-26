@@ -42,6 +42,7 @@ allocmap/
 │   │       │                           #   - attach(pid: u32) 构建采样器，附加 PTRACE_O_TRACECLONE（best-effort）
 │   │       │                           #   - sample() → SampleFrame（SIGSTOP→waitpid→读栈→PTRACE_CONT）
 │   │       │                           #   - sample() 使用 list_threads().len() 填充 thread_count 字段（Iter 02 新增）
+│   │       │                           #   - sample() 填充 thread_ids: Vec<u32>（Iter 03 新增）
 │   │       │                           #   - 3 个单元测试
 │   │       ├── macos_sampler.rs        # macOS 平台采样器存根（Phase 2 Iter 01 新增）
 │   │       │                           #   - #[cfg(target_os = "macos")] 条件编译
@@ -83,12 +84,13 @@ allocmap/
 │   │       │                           #     60fps 渲染循环，从 mpsc::Receiver<SampleFrame> 消费数据
 │   │       ├── app.rs                  # App 状态管理
 │   │       │                           #   - frames: VecDeque<SampleFrame>（最多 500 帧）
-│   │       │                           #   - DisplayMode（Timeline/Hotspot/Flamegraph）
+│   │       │                           #   - DisplayMode（Timeline/Hotspot/Flamegraph/Threads）
+│   │       │                           #   - Threads 变体（Phase 2 Iter 03 新增）：T 键切换到线程列表视图
 │   │       │                           #   - is_replay / replay_speed / replay_paused（Phase 2 Iter 01 新增）
 │   │       │                           #   - pause_flag: Arc<AtomicBool>（Phase 2 Iter 02 新增）与 feeder 共享，真正中断帧流
 │   │       │                           #   - seek_target: Arc<AtomicU64>（Phase 2 Iter 02 新增）g/G 跳转目标
 │   │       │                           #   - replay_total_ms: u64（Phase 2 Iter 02 新增）回放总时长
-│   │       │                           #   - on_key() 处理键盘事件（q/t/h/f/Space/g/G/+/-/↑↓/Enter）
+│   │       │                           #   - on_key() 处理键盘事件（q/t/h/f/T/Space/g/G/+/-/↑↓/Enter）
 │   │       │                           #   - 13 个单元测试（iter02 新增）
 │   │       ├── timeline.rs             # 内存时序图组件
 │   │       │                           #   - Unicode block-character 柱状图
@@ -98,6 +100,9 @@ allocmap/
 │   │       │                           #   - top-N AllocationSite 渲染
 │   │       │                           #   - 支持折叠/展开调用栈（Enter 键）
 │   │       ├── theme.rs                # 颜色主题常量（关联函数形式，Theme::xxx()）
+│   │       │   （注：render_threads_panel() 线程面板渲染函数，Phase 2 Iter 03 新增）
+│   │       │                           #   - render_threads_panel()：使用 ratatui Table 组件渲染 TID + Role 表格
+│   │       │                           #   - Stats bar 新增 THREADS: N 字段
 │   │       └── events.rs               # 键盘事件轮询
 │   │                                   #   - AppEvent enum（Key/Resize/Tick）
 │   │                                   #   - poll_event(timeout: Duration) → Option<AppEvent>
@@ -205,7 +210,7 @@ allocmap/
 
 所有其他 crate 均依赖此 crate。定义了项目中所有核心数据类型：
 
-- `SampleFrame`：一次采样的快照数据（timestamp_ms、live_heap_bytes、alloc_rate、free_rate、top_sites、thread_count）
+- `SampleFrame`：一次采样的快照数据（timestamp_ms、live_heap_bytes、alloc_rate、free_rate、top_sites、thread_count、thread_ids）
 - `AllocationSite`：一个分配热点（bytes、count、调用栈 Vec<StackFrame>）
 - `StackFrame`：调用栈中的一帧（address、function_name、file、line）
 - `AllocMapRecording`：完整的 .amr 录制文件（header + frames + footer）
@@ -251,4 +256,4 @@ Error: Invalid duration 'xyz': expected format like 30s, 5m, 1h
 
 ---
 
-*最后更新：Phase 2 Iter 02（2026-03-26）*
+*最后更新：Phase 2 Iter 03（2026-03-26）*

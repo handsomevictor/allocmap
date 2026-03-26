@@ -226,4 +226,54 @@ sleep_ms = (frame[i+1].timestamp_ms - frame[i].timestamp_ms) / speed
 
 ---
 
-*最后更新：Phase 2 Iter 02（2026-03-26）*
+## Phase 2 — Iter 03（2026-03-26）
+
+### 经验：ratatui Table 组件适合展示结构化列表数据（如线程 TID 表格）
+
+**背景**：Phase 2 Iter 03 需要在 TUI 中新增一个线程视图，展示当前采样帧的所有活跃线程（TID + 角色）。
+
+**问题**：最初考虑用 `Paragraph` 组件手动拼接文本行来渲染线程列表，但这样无法对齐列宽，也难以后续扩展为可选中、可滚动的多列表格。
+
+**解决方案**：使用 ratatui 的 `Table` 组件：
+- `Table::new(rows, widths)` 接受 `Vec<Row>` 和列宽约束（`Constraint::Length` / `Constraint::Min`）
+- 每个 `Row` 由若干 `Cell` 组成，支持独立样式（如用 `Style::default().fg(Color::Cyan)` 高亮主线程）
+- `Table` 自带列对齐，无需手动 `format!("{:>10}", ...)`
+- 切换到 `DisplayMode::Threads` 后，渲染函数 `render_threads_panel()` 从最新帧的 `thread_ids` 字段构建 `Vec<Row>`
+
+**关键代码模式**：
+```rust
+let rows: Vec<Row> = thread_ids.iter().map(|&tid| {
+    let role = if tid == min_tid { "main" } else { "worker" };
+    Row::new(vec![
+        Cell::from(tid.to_string()),
+        Cell::from(role),
+    ])
+}).collect();
+
+let table = Table::new(rows, [Constraint::Length(8), Constraint::Min(10)])
+    .header(Row::new(vec!["TID", "Role"]).style(Style::default().bold()));
+```
+
+**教训**：
+1. ratatui `Table` 是渲染二维列表（如线程列表、热点列表）的首选组件，比手动字符串拼接可维护性高得多
+2. `Constraint::Length(N)` 适合固定宽度列（如 TID 数字），`Constraint::Min(N)` 适合弹性宽度列（如函数名、角色名）
+3. 表格的"最小 TID 为主线程"启发式规则简单有效，避免了需要额外 API 来区分主线程的复杂度
+
+---
+
+### 经验：`#[serde(default)]` 是向后兼容结构体字段扩展的标准做法
+
+**背景**：`SampleFrame` 新增 `thread_ids: Vec<u32>` 字段，需要确保旧版本录制的 `.amr` 文件仍可正常反序列化。
+
+**问题**：如果直接添加字段而不设默认值，使用 `serde` 反序列化旧文件时会因字段缺失而报错。
+
+**解决方案**：对新字段添加 `#[serde(default)]` 注解。`Vec<u32>` 的 `Default` 实现返回空 `Vec`，因此旧文件在反序列化时 `thread_ids` 自动填充为 `[]`，完全无感知。
+
+**教训**：
+1. 任何对已存在序列化格式（`.amr` 文件、JSON 输出）的结构体字段扩展，都必须加 `#[serde(default)]`
+2. `bincode` 和 `serde_json` 对此注解的处理行为一致：字段缺失时使用 `Default::default()`
+3. 这个模式应作为 AllocMap 核心数据结构扩展的标准规范，记入代码注释
+
+---
+
+*最后更新：Phase 2 Iter 03（2026-03-26）*
