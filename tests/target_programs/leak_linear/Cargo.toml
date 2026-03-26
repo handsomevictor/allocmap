@@ -1,0 +1,8 @@
+[package]
+name = "leak_linear"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "leak_linear"
+path = "src/main.rs"

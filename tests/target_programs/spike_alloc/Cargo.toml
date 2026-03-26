@@ -1,0 +1,8 @@
+[package]
+name = "spike_alloc"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "spike_alloc"
+path = "src/main.rs"

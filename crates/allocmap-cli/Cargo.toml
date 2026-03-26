@@ -1,0 +1,24 @@
+[package]
+name = "allocmap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "实时内存分析工具，无需重启进程"
+repository = "https://github.com/handsomevictor/allocmap"
+
+[[bin]]
+name = "allocmap"
+path = "src/main.rs"
+
+[dependencies]
+allocmap-core = { path = "../allocmap-core" }
+allocmap-tui = { path = "../allocmap-tui" }
+anyhow = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+owo-colors = { workspace = true }
+colored = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+allocmap-ptrace = { path = "../allocmap-ptrace" }

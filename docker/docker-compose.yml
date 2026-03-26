@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  # 开发镜像：日常编写代码、编译、运行
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: allocmap-dev:latest
+    container_name: allocmap-dev
+    volumes:
+      - ..:/workspace
+    working_dir: /workspace
+    # ptrace 功能所需
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    # 注入 GitHub Token（从宿主机 ~/.bashrc 的环境变量读取）
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - RUST_BACKTRACE=1
+    stdin_open: true
+    tty: true
+    network_mode: host
+
+  # 集成测试镜像：模拟真实用户环境
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    image: allocmap-test:latest
+    container_name: allocmap-test
+    volumes:
+      - ..:/workspace
+    working_dir: /workspace
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      - RUST_BACKTRACE=1
+    stdin_open: true
+    tty: true

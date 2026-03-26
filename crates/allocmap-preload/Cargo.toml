@@ -1,0 +1,17 @@
+[package]
+name = "allocmap-preload"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 编译为动态库（.so），通过 LD_PRELOAD 注入
+[lib]
+crate-type = ["cdylib"]
+name = "allocmap_preload"
+
+[dependencies]
+allocmap-core = { path = "../allocmap-core" }
+anyhow = { workspace = true }
+
+# 注意：.so 内部禁止使用标准 allocator
+# 所有内部数据结构必须通过 bump_alloc 模块分配

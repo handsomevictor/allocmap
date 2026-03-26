@@ -1,0 +1,20 @@
+[build]
+# r8a.large 有足够内存，4并行编译
+jobs = 4
+
+[profile.dev]
+# 保留调试符号，ptrace 符号解析需要
+debug = true
+opt-level = 0
+
+[profile.release]
+debug = false
+strip = "debuginfo"
+opt-level = 3
+lto = "thin"
+
+# 专门用于 profiling 的 profile（保留符号但开启优化）
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = "none"

@@ -1,0 +1,10 @@
+{
+  "current_phase": 1,
+  "phase1_iterations": 0,
+  "phase2_iterations": 0,
+  "phase1_status": "not_started",
+  "phase2_status": "not_started",
+  "last_updated": "",
+  "phase1_passed": false,
+  "phase2_passed": false
+}

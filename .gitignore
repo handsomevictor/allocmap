@@ -1,0 +1,32 @@
+# Rust 编译产物
+target/
+
+# 环境变量文件（不上传 token）
+.env
+.env.local
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# 测试临时文件
+/tmp/
+*.log
+test_output.txt
+
+# 大型录制文件（测试用的保留，用户产生的不上传）
+*.amr.tmp
+
+# Docker 卷数据
+docker/volumes/
+
+# Cargo.lock 对于 binary 项目应提交
+# 对于 library 项目应忽略
+# allocmap 是 binary，保留 Cargo.lock

@@ -1,0 +1,8 @@
+[package]
+name = "steady_state"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "steady_state"
+path = "src/main.rs"

@@ -1,0 +1,12 @@
+[package]
+name = "allocmap-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+allocmap-core = { path = "../allocmap-core" }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+anyhow = { workspace = true }
+owo-colors = { workspace = true }
