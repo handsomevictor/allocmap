@@ -48,15 +48,29 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
 
     let max_bytes = data.iter().copied().max().unwrap_or(1).max(1);
 
-    // Build a simple bar/braille chart
-    let chart_height = height.saturating_sub(1);
+    // Build a sparkline-style chart using 8-level Unicode block characters.
+    // Each data column is encoded as: full rows of '█' + a partial tip char (▁▂▃▄▅▆▇).
+    // This produces a proper wave shape — different heights show different characters.
+    const BLOCKS: &[char] = &[' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+    let chart_height = height.saturating_sub(1).max(1);
     let mut rows: Vec<String> = vec![String::new(); chart_height];
 
     for &val in &data {
-        let bar_h = ((val as f64 / max_bytes as f64) * chart_height as f64) as usize;
-        let bar_h = bar_h.min(chart_height);
+        // height in 1/8-row sub-units
+        let full_h = ((val as f64 / max_bytes as f64) * (chart_height as f64 * 8.0)) as usize;
+        let full_rows = full_h / 8;   // rows completely filled with '█'
+        let frac     = (full_h % 8).min(BLOCKS.len() - 1);  // fractional tip
+
         for (row, row_buf) in rows.iter_mut().enumerate() {
-            let ch = if chart_height - row <= bar_h { '█' } else { ' ' };
+            let row_from_bottom = chart_height - 1 - row;
+            let ch = if row_from_bottom < full_rows {
+                '█'
+            } else if row_from_bottom == full_rows {
+                BLOCKS[frac]
+            } else {
+                ' '
+            };
             row_buf.push(ch);
         }
     }

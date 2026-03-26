@@ -4,8 +4,45 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem},
     Frame,
 };
+use allocmap_core::StackFrame;
 use crate::app::App;
 use crate::theme::Theme;
+
+/// Walk the call stack from innermost to outermost and return the first frame
+/// that looks like user-application code rather than a libc/kernel/stdlib frame.
+/// Falls back to the first frame with any resolved name, then to the raw first frame.
+fn best_user_frame(frames: &[StackFrame]) -> Option<&StackFrame> {
+    // Skip frames whose resolved names match well-known stdlib/syscall patterns.
+    const SKIP: &[&str] = &[
+        "nanosleep", "clock_nanosleep", "clock_gettime",
+        "futex", "epoll_wait", "poll", "select",
+        "pthread_cond", "pthread_mutex",
+        "__GI_", "__kernel_", "__libc_",
+        "libc::", "std::sys", "std::thread::sleep",
+        "tokio::", "mio::", "core::", "alloc::",
+        "malloc", "free", "calloc", "realloc",
+        "clone", "sigreturn",
+    ];
+
+    let is_stdlib = |name: &str| SKIP.iter().any(|pat| name.contains(pat));
+
+    // First pass: find a resolved, non-stdlib name
+    for frame in frames.iter() {
+        if let Some(ref name) = frame.function {
+            if !is_stdlib(name) {
+                return Some(frame);
+            }
+        }
+    }
+    // Second pass: any resolved name at all
+    for frame in frames.iter() {
+        if frame.function.is_some() {
+            return Some(frame);
+        }
+    }
+    // Fallback: innermost raw frame
+    frames.first()
+}
 
 /// Render the hotspot list showing top allocation sites
 pub fn render_hotspot(f: &mut Frame, app: &App, area: Rect) {
@@ -43,8 +80,10 @@ pub fn render_hotspot(f: &mut Frame, app: &App, area: Rect) {
             Theme::hotspot_low()
         };
 
-        // Function name from top frame
-        let func_name = site.frames.first()
+        // Find the most meaningful frame: prefer the first resolved user-space function.
+        // Walk from innermost outward; skip well-known stdlib/syscall frames so that
+        // user functions like `function_a_heavy_alloc` surface at the top.
+        let func_name = best_user_frame(&site.frames)
             .map(|f| f.display_name())
             .unwrap_or_else(|| "<unknown>".to_string());
 

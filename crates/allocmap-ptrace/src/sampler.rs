@@ -3,10 +3,49 @@ use nix::sys::ptrace;
 use nix::sys::signal::Signal;
 use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::Pid;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
-use allocmap_core::{SampleFrame, AllocationSite};
+use allocmap_core::{SampleFrame, AllocationSite, StackFrame};
 use crate::attach::{PtraceAttach, get_heap_bytes};
 use crate::backtrace::BacktraceCapture;
+
+/// One accumulated call-site entry: keeps track of how many times this unique
+/// call stack was observed and the heap state during those observations.
+#[derive(Debug, Clone)]
+struct AccumSite {
+    frames: Vec<StackFrame>,
+    /// Heap bytes at the latest sample where this stack was active
+    live_bytes: u64,
+    /// Sum of live_heap_bytes across all samples for this stack
+    live_bytes_sum: u64,
+    /// How many samples captured this call stack
+    sample_count: u64,
+}
+
+impl AccumSite {
+    /// Average live heap bytes across all samples for this site.
+    /// This is more stable than the instantaneous `live_bytes` because it
+    /// represents the memory "associated with" this call stack over its lifetime.
+    fn avg_live_bytes(&self) -> u64 {
+        if self.sample_count == 0 { 0 } else { self.live_bytes_sum / self.sample_count }
+    }
+}
+
+/// Compute a 64-bit fingerprint for the top-N frame IPs in a call stack.
+/// We use the top 6 IPs so that the same function (even at different heap sizes)
+/// maps to the same bucket.
+fn stack_fingerprint(frames: &[StackFrame]) -> u64 {
+    // FNV-1a 64-bit hash
+    let mut h: u64 = 0xcbf29ce484222325;
+    for f in frames.iter().take(6) {
+        let bytes = f.ip.to_le_bytes();
+        for b in bytes {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+    }
+    h
+}
 
 /// Configuration for the ptrace sampler
 #[derive(Debug, Clone)]
@@ -38,6 +77,9 @@ pub struct PtraceSampler {
     /// Tracks previous measurement for rate calculation
     prev_heap_bytes: u64,
     prev_sample_time: Instant,
+    /// Accumulated call-site observations across samples.
+    /// Key = fingerprint of the top-6 frame IPs.
+    site_map: HashMap<u64, AccumSite>,
 }
 
 impl PtraceSampler {
@@ -56,6 +98,7 @@ impl PtraceSampler {
             start_time: Instant::now(),
             prev_heap_bytes: 0,
             prev_sample_time: Instant::now(),
+            site_map: HashMap::new(),
         })
     }
 
@@ -111,16 +154,42 @@ impl PtraceSampler {
         let elapsed_ms = self.start_time.elapsed().as_millis() as u64;
         self.sample_count += 1;
 
-        // Build allocation sites from the captured backtrace
-        let top_sites = if !frames.is_empty() {
-            vec![AllocationSite {
-                live_bytes: heap_bytes,
-                alloc_count: self.sample_count,
-                frames,
-            }]
-        } else {
-            vec![]
-        };
+        // Accumulate this sample into the per-call-stack site map.
+        // Each unique call stack (fingerprinted by its top-6 IPs) becomes one
+        // "allocation site", allowing the hotspot view to show which functions
+        // were active while the heap held the most memory.
+        // Accumulate this sample into the per-call-stack site map.
+        if !frames.is_empty() {
+            let key = stack_fingerprint(&frames);
+            let entry = self.site_map.entry(key).or_insert(AccumSite {
+                frames: frames.clone(),
+                live_bytes: 0,
+                live_bytes_sum: 0,
+                sample_count: 0,
+            });
+            entry.live_bytes = heap_bytes;
+            entry.live_bytes_sum += heap_bytes;
+            entry.sample_count += 1;
+            entry.frames = frames; // keep freshest resolved names
+        }
+
+        // Build top_sites sorted by avg_live_bytes (highest first).
+        // Using the average means both function_a (peak 100MB) and function_b
+        // (peak 200MB) stay visible simultaneously even after one has freed its
+        // allocation, because their averages reflect the whole observation window.
+        let mut sorted: Vec<&AccumSite> = self.site_map.values().collect();
+        sorted.sort_by(|a, b| b.avg_live_bytes().cmp(&a.avg_live_bytes())
+            .then(b.sample_count.cmp(&a.sample_count)));
+
+        let top_sites: Vec<AllocationSite> = sorted
+            .into_iter()
+            .take(self.config.top_n)
+            .map(|s| AllocationSite {
+                live_bytes: s.avg_live_bytes(),
+                alloc_count: s.sample_count,
+                frames: s.frames.clone(),
+            })
+            .collect();
 
         Ok(SampleFrame {
             timestamp_ms: elapsed_ms,

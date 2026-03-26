@@ -47,37 +47,57 @@ impl SymbolResolver {
         let maps_path = format!("/proc/{}/maps", pid);
         let maps_content = std::fs::read_to_string(&maps_path)?;
 
-        // Find which mapping contains this address
+        struct MapEntry {
+            start: u64,
+            end: u64,
+            file_offset: u64,
+            path: String,
+        }
+
+        // Parse all relevant map entries (backed by a real file path)
+        let mut entries: Vec<MapEntry> = Vec::new();
         for line in maps_content.lines() {
             let parts: Vec<&str> = line.splitn(6, ' ').collect();
             if parts.len() < 6 {
                 continue;
             }
-
-            let range = parts[0];
             let path = parts[5].trim();
-
             if path.is_empty() || !path.starts_with('/') {
                 continue;
             }
-
-            // Parse address range
+            let range = parts[0];
             let addrs: Vec<&str> = range.splitn(2, '-').collect();
             if addrs.len() != 2 {
                 continue;
             }
-
             let start = u64::from_str_radix(addrs[0], 16).unwrap_or(0);
-            let end = u64::from_str_radix(addrs[1], 16).unwrap_or(0);
-
-            if ip >= start && ip < end {
-                // Found the mapping; try to resolve via addr2line
-                let relative_ip = ip - start;
-                return self.resolve_with_addr2line(relative_ip, path, ip);
-            }
+            let end   = u64::from_str_radix(addrs[1], 16).unwrap_or(0);
+            let file_offset = u64::from_str_radix(parts[2].trim(), 16).unwrap_or(0);
+            entries.push(MapEntry { start, end, file_offset, path: path.to_string() });
         }
 
-        anyhow::bail!("Address 0x{:016x} not found in /proc/{}/maps", ip, pid);
+        // Find which entry contains `ip`
+        let Some(hit) = entries.iter().find(|e| ip >= e.start && ip < e.end) else {
+            anyhow::bail!("Address 0x{:016x} not found in /proc/{}/maps", ip, pid);
+        };
+
+        // For PIE executables and shared libraries the kernel places the binary
+        // at a runtime `load_base`.  All ELF virtual addresses are relative to
+        // that base.  The entry whose file_offset == 0 is always the first
+        // PT_LOAD segment and tells us the base:
+        //
+        //   load_base = mmap_start  (where file_offset == 0 for this path)
+        //   elf_vaddr = ip - load_base
+        //
+        // This is the address addr2line / DWARF expects.
+        let load_base = entries.iter()
+            .filter(|e| e.path == hit.path && e.file_offset == 0)
+            .map(|e| e.start)
+            .next()
+            .unwrap_or(hit.start);
+
+        let elf_vaddr = ip.saturating_sub(load_base);
+        self.resolve_with_addr2line(elf_vaddr, &hit.path, ip)
     }
 
     fn resolve_with_addr2line(&self, relative_ip: u64, binary_path: &str, raw_ip: u64) -> Result<StackFrame> {

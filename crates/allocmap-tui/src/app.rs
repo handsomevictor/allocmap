@@ -111,14 +111,52 @@ impl App {
         self.frames.back().map(|f| f.live_heap_bytes).unwrap_or(0)
     }
 
-    /// Get current alloc rate in bytes/sec
+    /// Get current alloc rate in bytes/sec (rolling average over last ~5 seconds).
+    ///
+    /// The instantaneous per-sample rate is nearly always 0 for programs that allocate
+    /// in bursts then sleep (like spike_alloc).  Instead we sum all positive heap deltas
+    /// across a sliding window and divide by the window duration, giving a stable
+    /// non-zero reading whenever allocations have happened recently.
     pub fn current_alloc_rate(&self) -> f64 {
-        self.frames.back().map(|f| f.alloc_rate).unwrap_or(0.0)
+        self.rolling_rates().0
     }
 
-    /// Get current free rate in bytes/sec
+    /// Get current free rate in bytes/sec (rolling average over last ~5 seconds).
     pub fn current_free_rate(&self) -> f64 {
-        self.frames.back().map(|f| f.free_rate).unwrap_or(0.0)
+        self.rolling_rates().1
+    }
+
+    /// Compute rolling alloc and free rates over the most recent window of frames.
+    /// Returns (alloc_bytes_per_sec, free_bytes_per_sec).
+    pub fn rolling_rates(&self) -> (f64, f64) {
+        let n = self.frames.len();
+        if n < 2 {
+            return (0.0, 0.0);
+        }
+        // Use up to the last 250 samples (~5 s at 50 Hz)
+        let window = n.min(250);
+        let frames: Vec<_> = self.frames.iter().rev().take(window).collect();
+
+        let newest_ms = frames.first().map(|f| f.timestamp_ms).unwrap_or(0);
+        let oldest_ms = frames.last().map(|f| f.timestamp_ms).unwrap_or(0);
+        let window_secs = (newest_ms.saturating_sub(oldest_ms) as f64 / 1000.0).max(0.001);
+
+        let mut total_alloc = 0.0_f64;
+        let mut total_free  = 0.0_f64;
+
+        // frames is newest-first; windows(2) gives [newer, older] pairs
+        for pair in frames.windows(2) {
+            let curr = pair[0].live_heap_bytes as f64;
+            let prev = pair[1].live_heap_bytes as f64;
+            let delta = curr - prev;
+            if delta > 0.0 {
+                total_alloc += delta;
+            } else {
+                total_free  += -delta;
+            }
+        }
+
+        (total_alloc / window_secs, total_free / window_secs)
     }
 
     /// Compute bytes/sec growth rate from oldest to newest frame
