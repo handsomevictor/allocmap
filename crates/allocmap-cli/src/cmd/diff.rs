@@ -212,6 +212,7 @@ mod tests {
         let make_site = |live_bytes: u64, func: &str| AllocationSite {
             live_bytes,
             alloc_count: 1,
+            peak_bytes: live_bytes,
             frames: vec![StackFrame {
                 ip: 0,
                 function: Some(func.to_string()),

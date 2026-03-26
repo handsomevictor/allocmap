@@ -32,6 +32,9 @@ pub struct AllocationSite {
     pub live_bytes: u64,
     /// 累计分配次数
     pub alloc_count: u64,
+    /// All-time peak live bytes observed for this site
+    #[serde(default)]
+    pub peak_bytes: u64,
     /// 调用栈（从最内层到最外层）
     pub frames: Vec<StackFrame>,
 }

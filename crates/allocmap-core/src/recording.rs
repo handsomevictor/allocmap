@@ -193,6 +193,7 @@ mod tests {
             top_sites: vec![AllocationSite {
                 live_bytes: 512,
                 alloc_count: 4,
+                peak_bytes: 512,
                 frames: vec![StackFrame {
                     ip: 0xdeadbeef,
                     function: Some("allocate_stuff".to_string()),

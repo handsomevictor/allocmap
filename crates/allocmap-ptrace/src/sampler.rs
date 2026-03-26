@@ -20,6 +20,10 @@ struct AccumSite {
     live_bytes_sum: u64,
     /// How many samples captured this call stack
     sample_count: u64,
+    /// All-time peak live bytes seen while this site was active
+    peak_bytes: u64,
+    /// Number of heap-increase events observed for this site
+    alloc_events: u64,
 }
 
 impl AccumSite {
@@ -158,15 +162,23 @@ impl PtraceSampler {
         // Each unique call stack (fingerprinted by its top-6 IPs) becomes one
         // "allocation site", allowing the hotspot view to show which functions
         // were active while the heap held the most memory.
-        // Accumulate this sample into the per-call-stack site map.
         if !frames.is_empty() {
             let key = stack_fingerprint(&frames);
             let entry = self.site_map.entry(key).or_insert(AccumSite {
                 frames: frames.clone(),
-                live_bytes: 0,
+                live_bytes: 0,       // start at 0 so first observation triggers alloc_events
                 live_bytes_sum: 0,
                 sample_count: 0,
+                peak_bytes: 0,
+                alloc_events: 0,
             });
+            // Count a new allocation event when heap grew since last observation of this site
+            if heap_bytes > entry.live_bytes {
+                entry.alloc_events += 1;
+            }
+            if heap_bytes > entry.peak_bytes {
+                entry.peak_bytes = heap_bytes;
+            }
             entry.live_bytes = heap_bytes;
             entry.live_bytes_sum += heap_bytes;
             entry.sample_count += 1;
@@ -185,8 +197,9 @@ impl PtraceSampler {
             .into_iter()
             .take(self.config.top_n)
             .map(|s| AllocationSite {
-                live_bytes: s.avg_live_bytes(),
-                alloc_count: s.sample_count,
+                live_bytes: s.live_bytes,               // instantaneous (not avg)
+                alloc_count: s.alloc_events.max(1),     // heap-increase events
+                peak_bytes: s.peak_bytes,
                 frames: s.frames.clone(),
             })
             .collect();

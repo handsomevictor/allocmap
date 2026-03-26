@@ -27,6 +27,16 @@ impl DisplayMode {
     }
 }
 
+/// One committed 5-second bucket for the frozen timeline chart
+#[derive(Debug, Clone)]
+pub struct TimelineColumn {
+    pub heap_bytes: u64,   // average heap during this 5-second window
+    pub end_ms: u64,       // timestamp (ms) when this window closed
+}
+
+const MAX_TIMELINE_COLS: usize = 200;
+const BUCKET_MS: u64 = 5_000; // 5 seconds per column
+
 const MAX_FRAMES: usize = 500;
 
 /// Main application state for the TUI
@@ -54,6 +64,16 @@ pub struct App {
     pub seek_target: Option<Arc<AtomicU64>>,
     /// Total duration of the recording in milliseconds (for jump-to-end)
     pub replay_total_ms: u64,
+    /// Committed 5-second timeline columns (frozen once written)
+    pub timeline_columns: VecDeque<TimelineColumn>,
+    /// Running sum for current open bucket
+    pub bucket_sum: u64,
+    /// Running count for current open bucket
+    pub bucket_count: u64,
+    /// Timestamp of the oldest frame in the current bucket
+    pub bucket_start_ms: Option<u64>,
+    /// All-time peak heap bytes
+    pub peak_heap_bytes: u64,
 }
 
 impl App {
@@ -75,6 +95,11 @@ impl App {
             pause_flag: None,
             seek_target: None,
             replay_total_ms: 0,
+            timeline_columns: VecDeque::with_capacity(MAX_TIMELINE_COLS),
+            bucket_sum: 0,
+            bucket_count: 0,
+            bucket_start_ms: None,
+            peak_heap_bytes: 0,
         }
     }
 
@@ -87,6 +112,28 @@ impl App {
 
     /// Add a new sample frame to the app state
     pub fn push_frame(&mut self, frame: SampleFrame) {
+        // Track all-time peak
+        if frame.live_heap_bytes > self.peak_heap_bytes {
+            self.peak_heap_bytes = frame.live_heap_bytes;
+        }
+
+        // Aggregate into 5-second timeline columns
+        let ts = frame.timestamp_ms;
+        let start = *self.bucket_start_ms.get_or_insert(ts);
+        if ts.saturating_sub(start) >= BUCKET_MS && self.bucket_count > 0 {
+            let avg = self.bucket_sum / self.bucket_count;
+            self.timeline_columns.push_back(TimelineColumn { heap_bytes: avg, end_ms: ts });
+            while self.timeline_columns.len() > MAX_TIMELINE_COLS {
+                self.timeline_columns.pop_front();
+            }
+            self.bucket_sum = frame.live_heap_bytes;
+            self.bucket_count = 1;
+            self.bucket_start_ms = Some(ts);
+        } else {
+            self.bucket_sum += frame.live_heap_bytes;
+            self.bucket_count += 1;
+        }
+
         if self.frames.len() >= MAX_FRAMES {
             self.frames.pop_front();
         }

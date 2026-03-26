@@ -133,9 +133,11 @@ pub async fn run_tui_loop(
                 format!("▽ -{}/s", timeline::format_bytes((-growth) as u64))
             };
             let thread_count = app.latest_frame().map(|f| f.thread_count).unwrap_or(1);
+            let peak_str = timeline::format_bytes(app.peak_heap_bytes.max(app.current_heap_bytes()));
             let stats_text = format!(
-                " LIVE HEAP: {}  {}  ALLOCS: {}/s  FREES: {}/s  THREADS: {}",
+                " LIVE: {} / {} peak  {}  ALLOCS: {}/s  FREES: {}/s  THREADS: {}",
                 heap_str,
+                peak_str,
                 growth_str,
                 timeline::format_bytes(app.current_alloc_rate() as u64),
                 timeline::format_bytes(app.current_free_rate() as u64),
