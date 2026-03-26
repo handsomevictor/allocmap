@@ -369,4 +369,86 @@ replay 命令读取相邻帧的 `timestamp_ms` 差值来计算等待时间，并
 
 ---
 
+## Phase 2 — Iter 03（2026-03-26）
+
+### 迭代目标
+
+实现多线程 TUI 视图，将 iter02 已采集的线程 ID 数据在界面中展示，完成 Phase 2 最终验收。
+
+### 构建与测试结果
+
+| 检查项 | 结果 |
+|--------|------|
+| `cargo build --release` | PASSED |
+| `cargo clippy --workspace -- -D warnings` | PASSED（0 warnings） |
+| `cargo test --workspace` | PASSED（68 tests，0 failures） |
+| Reviewer | PASSED |
+| Tester | PASSED |
+
+### 新增 / 修改的文件
+
+#### allocmap-core（SampleFrame 线程 ID 字段）
+
+- **`crates/allocmap-core/src/lib.rs`** / **`recording.rs`**（修改）：
+  - `SampleFrame` 新增字段 `thread_ids: Vec<u32>`，带 `#[serde(default)]` 注解确保向后兼容旧 `.amr` 文件
+  - 旧录制文件反序列化时 `thread_ids` 默认为空 `Vec`，不影响现有数据
+
+#### allocmap-ptrace（采样时填充 thread_ids）
+
+- **`crates/allocmap-ptrace/src/sampler.rs`**（修改）：
+  - 每次 `sample()` 调用中调用 `list_threads()` 获取当前线程 ID 列表，填充 `SampleFrame.thread_ids`
+  - `thread_ids` 与现有 `thread_count` 字段同步更新（`thread_count = thread_ids.len() as u32`）
+
+#### allocmap-tui（线程视图面板）
+
+- **`crates/allocmap-tui/src/app.rs`**（修改）：
+  - `DisplayMode` 枚举新增 `Threads` 变体
+  - `on_key()` 新增 `T` 键处理，切换到 `DisplayMode::Threads`
+
+- **`crates/allocmap-tui/src/lib.rs`** 或渲染模块（修改）：
+  - 新增 `render_threads_panel()` 函数，使用 ratatui `Table` 组件渲染线程列表
+  - 每行展示：`TID`（线程 ID）+ `Role`（主线程标记为 `main`，其余标记为 `worker`）
+  - Stats bar 新增 `THREADS: N` 字段显示当前采样帧的活跃线程数
+
+### 功能说明
+
+#### 线程视图（`T` 键）
+
+按 `T` 键切换到线程列表视图，显示当前采样帧的所有活跃线程：
+
+```
+┌─ Threads ─────────────────────────────┐
+│  TID     Role                         │
+│  ─────────────────────────────────    │
+│  7       main                         │
+│  8       worker                       │
+│  9       worker                       │
+│  11      worker                       │
+│  12      worker                       │
+└───────────────────────────────────────┘
+```
+
+- 最小 TID 的线程标记为 `main`（通常为进程主线程），其余标记为 `worker`
+- Stats bar 中始终显示 `THREADS: N`，即使当前视图不是线程视图
+
+#### Tester 验证结果
+
+multithreaded 目标程序 snapshot 输出中：
+- `thread_ids: [7, 8, 9, 11, 12]`
+- `thread_count: 5`（与 iter02 一致）
+
+### 测试结果
+
+- 总测试数：68（较 iter02 增加 1 个）
+- 新增测试：`DisplayMode::Threads` 变体测试
+- 所有测试通过
+
+### 验收状态
+
+- **Reviewer**: PASSED（0 clippy warnings）
+- **Tester**: PASSED（68 tests，multithreaded thread_ids 验证通过）
+- **Phase 2 状态：COMPLETED ✅**
+
+---
+
 <!-- 后续迭代记录由 Doc Agent 在每次迭代后追加 -->

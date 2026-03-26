@@ -1,7 +1,7 @@
-当前状态：Phase 2 - Iter 02 - Step 3（step3_reviewer_tester_running）
-上一步完成：Dev-A (replay pause/seek) + Dev-B (thread_count + PTRACE_O_TRACECLONE) DONE, 67 tests, 0 warnings
-下一步待做：Reviewer + Tester 结果 → Doc → DevOps commit+push → Phase 2 评估
-最后更新：2026-03-26T07:35:00Z
+当前状态：Phase 2 COMPLETED ✅
+上一步完成：Iter 03 Reviewer PASSED + Tester PASSED (68 tests, thread_ids confirmed)
+下一步待做：Doc agent (iter03 docs) + DevOps git commit+push → Phase 2 完成
+最后更新：2026-03-26T08:10:00Z
 
 Phase 2 Iter 01 目标：
 1. allocmap-replay: replay <file.amr> 命令 + TUI（Space暂停, +/-速度, g跳转）

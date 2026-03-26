@@ -5,10 +5,10 @@
   "phase1_iterations": 2,
   "phase2_iterations": 1,
   "phase1_status": "PASSED",
-  "phase2_status": "in_progress",
+  "phase2_status": "PASSED",
   "last_updated": "2026-03-26T04:30:00Z",
   "phase1_passed": true,
-  "phase2_passed": false,
+  "phase2_passed": true,
   "phase2_goals": [
     "allocmap replay <file.amr>",
     "allocmap diff <baseline.amr> <current.amr>",
