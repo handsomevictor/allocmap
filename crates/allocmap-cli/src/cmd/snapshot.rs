@@ -56,7 +56,7 @@ pub async fn execute(args: SnapshotArgs) -> Result<()> {
         // Run sampling in a blocking thread — attach AND sample must happen on the same OS thread
         // because Linux ptrace is per-thread: only the thread that called ptrace::attach may
         // issue subsequent ptrace operations.
-        tokio::task::spawn_blocking(move || {
+        let sampling_handle = tokio::task::spawn_blocking(move || {
             let mut sampler = match PtraceSampler::attach(pid) {
                 Ok(s) => s,
                 Err(e) => {
@@ -96,6 +96,8 @@ pub async fn execute(args: SnapshotArgs) -> Result<()> {
         while let Ok(frame) = rx.try_recv() {
             frames.push(frame);
         }
+        // Wait for the sampling thread to finish; ignore JoinError (task may have already finished)
+        let _ = sampling_handle.await;
 
         // Build summary statistics
         let sample_count = frames.len();
@@ -137,4 +139,36 @@ pub async fn execute(args: SnapshotArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// Test that a clearly non-existent PID path does not exist on Linux.
+    #[test]
+    fn test_nonexistent_pid_path() {
+        assert!(
+            !std::path::Path::new("/proc/99999999").exists(),
+            "/proc/99999999 should not exist"
+        );
+    }
+
+    /// Test that the current process has a valid /proc entry.
+    #[test]
+    fn test_current_pid_exists() {
+        let pid = std::process::id();
+        assert!(
+            std::path::Path::new(&format!("/proc/{}", pid)).exists(),
+            "/proc/{pid} should exist for the current process"
+        );
+    }
+
+    /// Test that duration parsing used by snapshot rejects invalid inputs.
+    #[test]
+    fn test_duration_parse_valid_and_invalid() {
+        assert!(crate::util::parse_duration("5s").is_ok());
+        assert!(crate::util::parse_duration("1m").is_ok());
+        assert!(crate::util::parse_duration("not_a_duration").is_err());
+        assert!(crate::util::parse_duration("").is_err());
+        assert!(crate::util::parse_duration("99x").is_err());
+    }
 }

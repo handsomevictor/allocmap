@@ -72,7 +72,26 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_duration_empty() {
+    fn test_parse_duration_empty_with_suffix() {
+        // "s" alone means parse "" as u64 — should fail
         assert!(parse_duration("s").is_err());
+    }
+
+    #[test]
+    fn test_parse_duration_empty_string() {
+        // A truly empty string has no suffix and cannot be parsed as u64
+        assert!(parse_duration("").is_err());
+    }
+
+    #[test]
+    fn test_parse_duration_zero_seconds() {
+        // Zero is a valid duration value
+        assert_eq!(parse_duration("0s").unwrap(), Duration::from_secs(0));
+    }
+
+    #[test]
+    fn test_parse_duration_large_value() {
+        // Large durations should round-trip correctly
+        assert_eq!(parse_duration("3600s").unwrap(), Duration::from_secs(3600));
     }
 }

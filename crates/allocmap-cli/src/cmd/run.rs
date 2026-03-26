@@ -27,6 +27,10 @@ pub struct RunArgs {
     /// Record session data to an .amr file
     #[arg(long)]
     pub record: Option<String>,
+
+    /// Display mode: timeline, hotspot, or flamegraph
+    #[arg(long, default_value = "timeline")]
+    pub mode: String,
 }
 
 pub async fn execute(args: RunArgs) -> Result<()> {
@@ -109,7 +113,9 @@ pub async fn execute(args: RunArgs) -> Result<()> {
                     let sample_interval = sampler.sample_interval();
                     let dur_clone = duration;
                     let tx_clone = tx.clone();
-                    tokio::task::spawn_blocking(move || {
+                    // The handle is intentionally not awaited — we drop it when TUI exits,
+                    // which signals the blocking thread to stop (tx_clone drops, blocking_send fails).
+                    let _sampling_handle = tokio::task::spawn_blocking(move || {
                         let start = std::time::Instant::now();
                         loop {
                             if let Some(d) = dur_clone {
@@ -171,7 +177,8 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     // ----- Interactive TUI mode -----
     allocmap_tui::install_panic_hook();
 
-    let mut app = allocmap_tui::App::new(child_pid, program_name.clone(), top_n);
+    let mode = allocmap_tui::DisplayMode::parse(&args.mode);
+    let mut app = allocmap_tui::App::new_with_mode(child_pid, program_name.clone(), top_n, mode);
     let mut terminal = allocmap_tui::init_terminal()
         .map_err(|e| anyhow::anyhow!("Failed to initialize terminal: {}", e))?;
 

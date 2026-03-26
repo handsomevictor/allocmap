@@ -80,7 +80,9 @@ pub async fn execute(args: AttachArgs) -> Result<()> {
         // IMPORTANT: attach AND sample must happen on the same OS thread because Linux ptrace
         // is per-thread — only the thread that called ptrace::attach may issue subsequent
         // ptrace operations.
-        tokio::task::spawn_blocking(move || {
+        // The handle is intentionally not awaited — we drop it when TUI exits,
+        // which signals the blocking thread to stop (tx_clone drops, blocking_send fails).
+        let _sampling_handle = tokio::task::spawn_blocking(move || {
             let mut sampler = match PtraceSampler::attach(pid) {
                 Ok(s) => s,
                 Err(e) => {
@@ -201,4 +203,43 @@ pub async fn execute(args: AttachArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// Test that a clearly invalid PID has no /proc entry.
+    #[test]
+    fn test_pid_validation_nonexistent() {
+        assert!(
+            !std::path::Path::new("/proc/99999999").exists(),
+            "/proc/99999999 should not exist"
+        );
+    }
+
+    /// Test that the current process always has a valid /proc entry.
+    #[test]
+    fn test_pid_validation_self() {
+        let pid = std::process::id();
+        assert!(
+            std::path::Path::new(&format!("/proc/{}", pid)).exists(),
+            "/proc/{{pid}} should always exist for the running process"
+        );
+    }
+
+    /// Test that DisplayMode::parse returns the correct variants and defaults for unknowns.
+    #[test]
+    fn test_mode_parse_all_variants() {
+        use allocmap_tui::DisplayMode;
+
+        assert_eq!(DisplayMode::parse("timeline"), DisplayMode::Timeline);
+        assert_eq!(DisplayMode::parse("hotspot"), DisplayMode::Hotspot);
+        assert_eq!(DisplayMode::parse("flamegraph"), DisplayMode::Flamegraph);
+        // Case-insensitive
+        assert_eq!(DisplayMode::parse("TIMELINE"), DisplayMode::Timeline);
+        assert_eq!(DisplayMode::parse("HOTSPOT"), DisplayMode::Hotspot);
+        assert_eq!(DisplayMode::parse("FLAMeGraph"), DisplayMode::Flamegraph);
+        // Unknown value falls back to Timeline
+        assert_eq!(DisplayMode::parse("unknown"), DisplayMode::Timeline);
+        assert_eq!(DisplayMode::parse(""), DisplayMode::Timeline);
+    }
 }

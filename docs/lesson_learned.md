@@ -100,4 +100,28 @@
 
 ---
 
-*最后更新：Phase 1 Iter 01（2026-03-26）*
+## Phase 1 — Iter 02（2026-03-26）
+
+### 经验：spawn_blocking JoinHandle 处理
+
+**问题**：`tokio::task::spawn_blocking` 返回 `JoinHandle`，如果不保存该 handle，其中发生的 panic 会被静默丢弃，调用方无法感知错误。
+
+**修复**：
+- 对于需要等待结果的场景（如 snapshot），用 `let handle = spawn_blocking(...); handle.await` 显式等待。
+- 对于不需要等待的场景（如 attach 的 TUI 模式），用 `let _handle = spawn_blocking(...)` 命名变量，明确表达"有意不等待"的意图。
+
+**教训**：在 Tokio 异步代码中，任何 `spawn_blocking` 调用都应保存 handle 并处理，即使只是为了记录 panic。
+
+---
+
+### 经验：测试覆盖率从第一个迭代开始
+
+**问题**：Iter 01 中 allocmap-tui 和 allocmap-cli 测试覆盖率为 0，导致 Reviewer 给出 "FAILED WITH CONDITIONS" 的判决。
+
+**修复**：Iter 02 补充了 28 个新测试，将总数从 27 提升至 55。
+
+**教训**：每个 crate 的测试覆盖率应在实现的同一迭代中完成，而不是推迟到下一个迭代。CLAUDE.md 规范要求每个功能最少 3 个测试（成功、无效输入、边界情况）。
+
+---
+
+*最后更新：Phase 1 Iter 02（2026-03-26）*

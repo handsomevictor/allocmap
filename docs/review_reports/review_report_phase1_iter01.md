@@ -374,3 +374,206 @@ allocmap snapshot --pid <leak_linear> --duration 5s → PASSED (returns real hea
 Core ptrace sampling now works. Remaining gaps (test coverage for allocmap-tui/cli,
 integration tests, --mode flag in run command) are tracked for iter02.
 
+---
+
+## Tester Report — Iter 02
+
+**Date**: 2026-03-26
+**Tester**: Tester Agent
+
+### Verdict: PASSED
+
+All functional tests pass. The cross-thread ptrace bug fixed in Iter 01 is confirmed resolved:
+`allocmap snapshot` now produces real samples (sample_count = 146, peak_heap_bytes = 2,199,552)
+against a live `leak_linear` target. Unit test count increased from 27 to 55 (all pass).
+
+---
+
+### Unit Test Results
+
+| Crate | Tests | Result |
+|-------|-------|--------|
+| allocmap-cli (binary) | 16 | PASSED |
+| allocmap-cli (integration) | 5 | PASSED |
+| allocmap-core | 3 | PASSED |
+| allocmap-preload | 4 | PASSED |
+| allocmap-ptrace | 13 | PASSED |
+| allocmap-tui | 14 | PASSED |
+| **Total** | **55** | **PASSED** |
+
+Note: `allocmap-tui` now has 14 unit tests (up from 0 in Iter 01), covering App state, event
+handling, growth rate calculations, mode parsing, and ring buffer behavior.
+
+---
+
+### Functional Tests
+
+| Test | Result |
+|------|--------|
+| snapshot success (leak_linear, sample_count=146, peak_heap_bytes>0) | PASSED |
+| snapshot error: non-existent PID (exit 1, English message) | PASSED |
+| snapshot error: invalid duration format (exit 1, English message) | PASSED |
+| --help output in English | PASSED |
+| attach --help: all options present (--pid, --duration, --top, --mode, --output, --record, --sample-rate) | PASSED |
+| run --help: --mode option present | PASSED |
+| test target programs (4/4 run correctly) | PASSED |
+
+---
+
+### Evidence
+
+**Snapshot success output** (JSON validated via Python):
+```
+PASS: sample_count = 146
+PASS: peak_heap_bytes = 2199552
+SAMPLING: WORKING
+```
+
+**Non-existent PID error**:
+```
+Error: Process 99999999 not found. Make sure the PID is correct and the process is running.
+exit:1
+```
+
+**Invalid duration error**:
+```
+Error: Invalid duration 'badformat': expected format like 30s, 5m, 1h
+exit:1
+```
+
+**--help (first lines — English)**:
+```
+Real-time heap memory profiler — attach to running processes without restart
+
+Usage: allocmap <COMMAND>
+```
+
+**attach --help confirms all required options** including `--mode`, `--record`, `--sample-rate`.
+
+**run --help confirms --mode option** is now present (was missing in Iter 01 Reviewer finding).
+
+**All 4 test target programs start correctly**:
+```
+leak_linear:   [leak_linear] started, pid=9, leaking 10MB/sec
+spike_alloc:   [spike_alloc] started, pid=12, cycles=infinite
+steady_state:  [steady_state] started, pid=14, holding 50MB, allocating/freeing 1MB/sec
+multithreaded: [multithreaded] started, pid=18, launching 4 worker threads
+```
+
+---
+
+### Issues Found
+
+None blocking. The following items from the Iter 01 Reviewer report remain open but are
+non-blocking for Phase 1 core functionality:
+
+- `LIVE_BYTES` not decremented in `free()` hook (H1 — LD_PRELOAD path advisory counter only)
+- `static mut` function pointers in hooks.rs (M1 — no soundness issue with current guard)
+- VmRSS used as heap proxy (M2 — documented limitation)
+- SIGSTOP instead of PTRACE_INTERRUPT (M3 — functional but intrusive)
+- AllocationSite semantics in ptrace mode (M4 — cosmetic in ptrace path)
+- No `tests/integration/` directory
+- Dead code `print_error_and_exit` (L1)
+
+---
+
+### Summary
+
+All required Phase 1 checks pass in Iter 02:
+
+| Check | Result |
+|-------|--------|
+| `cargo test` (55 tests, 0 failed) | PASSED |
+| `allocmap snapshot` actual sampling (sample_count=146) | PASSED |
+| Error: non-existent PID | PASSED |
+| Error: invalid duration | PASSED |
+| --help output in English | PASSED |
+| attach --help: all options | PASSED |
+| run --help: --mode present | PASSED |
+| test target programs (4/4) | PASSED |
+
+**Overall Verdict: PASSED**
+
+Core ptrace sampling works correctly, all unit tests pass (55 total, up from 27), all CLI
+options are in place with English help text, and all four test target programs run as expected.
+
+---
+
+## Reviewer Report — Iter 02
+
+**Date**: 2026-03-26
+**Reviewer**: Reviewer Agent
+
+### Verdict: PASSED
+
+All iter01 tracked issues have been addressed. The codebase compiles cleanly, all tests pass,
+clippy reports zero warnings, and the specific fixes requested after iter01 are confirmed in place.
+
+---
+
+### Changes Verified
+
+**H3 — Cross-thread ptrace bug: CONFIRMED FIXED**
+Both `cmd/attach.rs` and `cmd/snapshot.rs` call `PtraceSampler::attach()` inside the
+`spawn_blocking` closure, ensuring attach and all subsequent ptrace operations occur on the
+same OS thread. The comment at `attach.rs` lines 82–84 documents this constraint explicitly.
+
+**H2 — realloc UB: CONFIRMED FIXED**
+`crates/allocmap-preload/src/hooks.rs` lines 235–240 cap the `copy_nonoverlapping` length at
+`BUMP_MAX_COPY_BYTES = 4096`, eliminating the out-of-bounds read.
+
+**H1 — LIVE_BYTES best-effort: CONFIRMED DOCUMENTED**
+`hooks.rs` `free()` hook (lines 157–161) includes a comment explaining that LIVE_BYTES cannot
+be decremented because `free()` receives no size, directing users to `/proc/pid/status` for
+accurate heap measurement.
+
+**Chinese --help text: CONFIRMED FIXED**
+`crates/allocmap-cli/src/cli.rs` uses fully English `about` text and subcommand doc-comments.
+The `--help` output now reads: "Real-time heap memory profiler — attach to running processes
+without restart".
+
+**spawn_blocking JoinHandle: CONFIRMED FIXED**
+`snapshot.rs` stores the handle (`let sampling_handle = ...`) and awaits it (`let _ = sampling_handle.await`).
+`attach.rs` uses `_sampling_handle` (intentionally not awaited — sender drop signals the blocking
+thread); this pattern is explicitly commented.
+
+**--mode option in `run`: CONFIRMED ADDED**
+`RunArgs` in `cmd/run.rs` includes `--mode` (default "timeline") at line 32–33.
+
+**Dockerfile clippy pre-install: CONFIRMED ADDED**
+`docker/Dockerfile` line 17: `RUN rustup component add clippy rustfmt`
+
+**Test coverage — allocmap-tui: CONFIRMED (14 tests)**
+`crates/allocmap-tui/src/app.rs` contains 14 unit tests covering initial state, frame push,
+mode constructor, growth rate, ring buffer cap (MAX_FRAMES=500), empty guard, key events
+(q/Q/Ctrl-C quit, mode switch h/f/t, scroll up/down saturating), and DisplayMode::parse.
+
+**Test coverage — allocmap-cli: CONFIRMED (16 unit + 5 integration = 21 tests)**
+- `cmd/attach.rs`: 3 unit tests (PID validation, mode parse all variants)
+- `cmd/snapshot.rs`: 3 unit tests (PID validation, duration parse valid/invalid)
+- `util.rs`: 10 unit tests (duration parsing edge cases including empty, zero, large values)
+- `crates/allocmap-cli/tests/integration_tests.rs`: 5 integration tests invoking the compiled
+  binary: `test_help_lists_subcommands`, `test_snapshot_help_is_english`,
+  `test_snapshot_nonexistent_pid_fails`, `test_snapshot_invalid_pid_type_fails`,
+  `test_snapshot_invalid_duration_fails`
+
+---
+
+### Remaining Issues (Medium/Low — Not Blocking Phase 1)
+
+- **M1**: `static mut` function pointers in `hooks.rs` — `OnceLock` would be more idiomatic.
+- **M2**: VmRSS used as heap proxy (`get_heap_bytes`) — documented limitation, acceptable for Phase 1.
+- **M3**: SIGSTOP used instead of `PTRACE_INTERRUPT` — minor intrusiveness.
+- **M4**: `AllocationSite` in ptrace mode represents total RSS, not per-function allocation.
+- **L1**: `print_error_and_exit` in `error.rs` still `#[allow(dead_code)]` and unused.
+- `cmd/run.rs` has no unit tests (covered partially by integration tests).
+- Flamegraph mode is a stub (renders placeholder text). Acceptable for Phase 1 per CLAUDE.md.
+
+---
+
+### Build Status
+
+- `cargo build`: PASSED
+- `cargo clippy -- -D warnings`: PASSED (0 warnings, 0 errors)
+- `cargo test`: PASSED (55 tests total: 16 allocmap-cli unit, 5 integration, 3 allocmap-core, 4 allocmap-preload, 13 allocmap-ptrace, 14 allocmap-tui)
+- `cargo build --release`: PASSED

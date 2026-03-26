@@ -13,6 +13,9 @@ RUN apt-get update && apt-get install -y \
     linux-perf \
     && rm -rf /var/lib/apt/lists/*
 
+# Pre-install clippy and rustfmt
+RUN rustup component add clippy rustfmt
+
 # 安装 cargo 工具
 RUN cargo install cargo-watch
 

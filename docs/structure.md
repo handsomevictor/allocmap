@@ -78,6 +78,7 @@ allocmap/
 │   │       │                           #   - frames: VecDeque<SampleFrame>（最多 500 帧）
 │   │       │                           #   - DisplayMode（Timeline/Hotspot/Flamegraph）
 │   │       │                           #   - on_key() 处理键盘事件（q/t/h/f/↑↓/Enter）
+│   │       │                           #   - 13 个单元测试（iter02 新增）
 │   │       ├── timeline.rs             # 内存时序图组件
 │   │       │                           #   - Unicode block-character 柱状图
 │   │       │                           #   - 颜色：绿（< 1MB/s）黄（1–10MB/s）红（> 10MB/s）
@@ -97,7 +98,7 @@ allocmap/
 │           ├── cli.rs                  # clap 命令定义（CLI 结构体，help 文本为英文）
 │           ├── util.rs                 # 工具函数
 │           │                           #   - parse_duration("30s"/"5m"/"1h") → Duration
-│           │                           #   - 7 个单元测试
+│           │                           #   - 9 个单元测试
 │           ├── error.rs                # 统一错误处理和格式化（English error messages）
 │           └── cmd/
 │               ├── attach.rs           # attach 命令实现
@@ -111,6 +112,11 @@ allocmap/
 │               └── snapshot.rs         # snapshot 命令实现
 │                                       #   - spawn_blocking 内完成 attach + 采样（ptrace 线程约束）
 │                                       #   - 输出 JSON：sample_count、peak_heap、avg_heap、top_sites
+│       └── tests/
+│           └── integration_tests.rs    # CLI 集成测试（iter02 新增，5 个测试）
+│                                       #   - snapshot 非存在 PID → 正确 error message
+│                                       #   - snapshot 无效 duration → 正确 error message
+│                                       #   - --help 输出为英文
 │
 ├── tests/
 │   ├── target_programs/                # 集成测试专用目标程序（每个均为独立 Cargo 项目）
@@ -126,8 +132,8 @@ allocmap/
 │   │   └── multithreaded/              # 8 线程并发分配场景
 │   │       ├── Cargo.toml
 │   │       └── src/main.rs
-│   └── integration/                    # 集成测试（iter02 计划创建）
-│       └── (待创建)
+│   └── integration/                    # 集成测试（暂未使用，测试集中在各 crate 内）
+│       └── (空目录)
 │
 ├── docs/
 │   ├── progress.md                     # 迭代进度记录（每次迭代追加）
@@ -225,4 +231,4 @@ Error: Invalid duration 'xyz': expected format like 30s, 5m, 1h
 
 ---
 
-*最后更新：Phase 1 Iter 01（2026-03-26）*
+*最后更新：Phase 1 Iter 02（2026-03-26）*

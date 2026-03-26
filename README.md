@@ -242,15 +242,16 @@ docker run --rm --cap-add=SYS_PTRACE --security-opt seccomp:unconfined \
   allocmap-dev bash -c "rustup component add clippy && cargo clippy --workspace -- -D warnings"
 ```
 
-当前测试状态（Phase 1 Iter 01）：
+当前测试状态（Phase 1 Iter 02，已完成）：
 
 | Crate | 测试数 | 状态 |
 |-------|--------|------|
 | allocmap-core | 3 | 通过 |
 | allocmap-ptrace | 13 | 通过 |
 | allocmap-preload | 4 | 通过 |
-| allocmap-cli | 7 | 通过 |
-| **合计** | **27** | **全部通过** |
+| allocmap-tui | 14 | 通过 |
+| allocmap-cli | 21 | 通过 |
+| **合计** | **55** | **全部通过** |
 
 ### 内置测试目标程序
 
@@ -266,15 +267,17 @@ allocmap snapshot --pid $! --duration 5s
 
 ## 路线图
 
-### Phase 1 — Linux 核心功能（当前）
+### Phase 1 — Linux 核心功能（✅ 已完成，iter02，2026-03-26）
 
 - [x] `allocmap attach` — ptrace 模式实时监控，TUI 界面
-- [x] `allocmap run` — LD_PRELOAD 模式，支持 `--env` 注入
+- [x] `allocmap run` — LD_PRELOAD 模式，支持 `--env` 注入，`--mode` 选项
 - [x] `allocmap snapshot` — 非交互式 JSON 快照
 - [x] 彩色 TUI（时序折线图 + 热点列表）
 - [x] JSON 报告输出（`--output` 选项）
 - [x] 内置测试目标程序（leak_linear、spike_alloc、steady_state、multithreaded）
 - [x] Docker 开发环境（`docker/Dockerfile`）
+- [x] 完整测试覆盖（55 tests，全部通过）
+- [x] Reviewer PASSED，Tester PASSED（snapshot 146 frames, peak 2.1MB）
 
 ### Phase 2 — 完整产品（计划中）
 

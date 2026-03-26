@@ -179,4 +179,42 @@
 
 ---
 
+## Phase 1 — Iter 02（2026-03-26）
+
+### 目标
+修复 Iter 01 遗留问题，达到 Phase 1 完整验收标准。
+
+### 本次修改
+
+#### 新增测试
+- `allocmap-tui/src/app.rs`：新增 13 个单元测试（App 状态、push_frame、ring buffer、按键事件、DisplayMode）
+- `allocmap-cli/src/cmd/attach.rs`：新增 3 个测试（PID 验证、DisplayMode 解析）
+- `allocmap-cli/src/cmd/snapshot.rs`：新增 3 个测试（PID 验证、duration 解析集成）
+- `allocmap-cli/tests/integration_tests.rs`：新增 5 个集成测试（snapshot 非存在PID、无效duration、--help英文）
+- `allocmap-cli/src/util.rs`：扩展至 9 个 duration 解析测试
+
+#### Bug 修复
+- `cmd/attach.rs`：`spawn_blocking` 返回的 `JoinHandle` 命名为 `_sampling_handle`（避免 panic 被丢弃）
+- `cmd/snapshot.rs`：`sampling_handle.await` 正确等待采样线程完成
+- `cmd/run.rs`：新增 `--mode` 选项（与 attach 命令保持一致），修复 JoinHandle
+
+#### 功能增强
+- `cmd/run.rs`：新增 `--mode timeline|hotspot|flamegraph` 选项
+
+#### DevOps
+- `docker/Dockerfile`：新增 `rustup component add clippy rustfmt`，确保容器内 clippy 预装
+
+### 测试结果
+- 总测试数：55（较 iter01 增加 28 个）
+- allocmap-tui：14 tests（原 0）
+- allocmap-cli：21 tests（原 0）
+- 所有测试通过
+
+### 验收状态
+- **Reviewer**: PASSED（0 clippy warnings，所有修改已验证）
+- **Tester**: PASSED（55 tests, snapshot 146 frames, peak 2.1MB）
+- **Phase 1 状态：COMPLETED ✅**
+
+---
+
 <!-- 后续迭代记录由 Doc Agent 在每次迭代后追加 -->

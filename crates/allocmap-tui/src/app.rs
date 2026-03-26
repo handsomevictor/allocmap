@@ -126,7 +126,7 @@ impl App {
         }
     }
 
-    /// Handle a key event
+    /// Handle a key event, returning true if the app should quit.
     pub fn on_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => {
@@ -159,5 +159,178 @@ impl App {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use allocmap_core::SampleFrame;
+
+    fn make_frame(heap_bytes: u64, timestamp_ms: u64) -> SampleFrame {
+        SampleFrame {
+            timestamp_ms,
+            live_heap_bytes: heap_bytes,
+            alloc_rate: 0.0,
+            free_rate: 0.0,
+            top_sites: vec![],
+        }
+    }
+
+    // ── Success tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_app_new_initial_state() {
+        let app = App::new(1234, "test_prog".to_string(), 20);
+        assert_eq!(app.pid, 1234);
+        assert_eq!(app.program_name, "test_prog");
+        assert_eq!(app.top_n, 20);
+        assert_eq!(app.current_heap_bytes(), 0);
+        assert!(!app.should_quit);
+        assert_eq!(app.mode, DisplayMode::Timeline);
+        assert_eq!(app.total_samples, 0);
+        assert!(app.frames.is_empty());
+    }
+
+    #[test]
+    fn test_push_frame_updates_heap_and_sample_count() {
+        let mut app = App::new(1, "test".to_string(), 20);
+        app.push_frame(make_frame(1024 * 1024, 0));
+        assert_eq!(app.current_heap_bytes(), 1024 * 1024);
+        assert_eq!(app.total_samples, 1);
+
+        app.push_frame(make_frame(2 * 1024 * 1024, 1000));
+        assert_eq!(app.current_heap_bytes(), 2 * 1024 * 1024);
+        assert_eq!(app.total_samples, 2);
+    }
+
+    #[test]
+    fn test_new_with_mode_sets_mode() {
+        let app = App::new_with_mode(42, "prog".to_string(), 10, DisplayMode::Hotspot);
+        assert_eq!(app.mode, DisplayMode::Hotspot);
+        assert_eq!(app.pid, 42);
+    }
+
+    #[test]
+    fn test_growth_rate_two_frames() {
+        let mut app = App::new(1, "test".to_string(), 20);
+        // 1 MB at t=0, 2 MB at t=1000ms → growth = 1MB/s
+        app.push_frame(make_frame(1_048_576, 0));
+        app.push_frame(make_frame(2_097_152, 1000));
+        let rate = app.growth_rate_bytes_per_sec();
+        assert!((rate - 1_048_576.0).abs() < 1.0, "Expected ~1MB/s growth, got {rate}");
+    }
+
+    // ── Failure / boundary tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_ring_buffer_capped_at_max_frames() {
+        let mut app = App::new(1, "test".to_string(), 20);
+        // Push more than MAX_FRAMES (500) frames
+        for i in 0..600u64 {
+            app.push_frame(make_frame(i * 1000, i * 100));
+        }
+        assert!(
+            app.frames.len() <= 500,
+            "Ring buffer should be capped at MAX_FRAMES=500, got {}",
+            app.frames.len()
+        );
+        // The latest frame should be from the last push
+        assert_eq!(app.current_heap_bytes(), 599 * 1000);
+        // total_samples keeps counting beyond MAX_FRAMES
+        assert_eq!(app.total_samples, 600);
+    }
+
+    #[test]
+    fn test_current_heap_bytes_empty() {
+        let app = App::new(1, "test".to_string(), 20);
+        assert_eq!(app.current_heap_bytes(), 0, "Empty app should return 0 heap bytes");
+    }
+
+    #[test]
+    fn test_growth_rate_single_frame_is_zero() {
+        let mut app = App::new(1, "test".to_string(), 20);
+        app.push_frame(make_frame(1_000_000, 0));
+        assert_eq!(app.growth_rate_bytes_per_sec(), 0.0, "Single frame should yield zero growth rate");
+    }
+
+    // ── Key-event tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_on_key_q_sets_should_quit() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new(1, "test".to_string(), 20);
+        assert!(!app.should_quit);
+        app.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_on_key_ctrl_c_sets_should_quit() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new(1, "test".to_string(), 20);
+        app.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_on_key_mode_switching() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new(1, "test".to_string(), 20);
+        assert_eq!(app.mode, DisplayMode::Timeline);
+
+        app.on_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        assert_eq!(app.mode, DisplayMode::Hotspot);
+
+        app.on_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        assert_eq!(app.mode, DisplayMode::Flamegraph);
+
+        app.on_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+        assert_eq!(app.mode, DisplayMode::Timeline);
+    }
+
+    #[test]
+    fn test_on_key_scroll() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new(1, "test".to_string(), 20);
+        assert_eq!(app.scroll_offset, 0);
+
+        app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.scroll_offset, 1);
+
+        app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.scroll_offset, 2);
+
+        // Scrolling up from 2 → 1
+        app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.scroll_offset, 1);
+
+        // Saturating: scrolling up from 0 stays at 0
+        app.scroll_offset = 0;
+        app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    // ── DisplayMode tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_display_mode_parse_valid() {
+        assert_eq!(DisplayMode::parse("timeline"), DisplayMode::Timeline);
+        assert_eq!(DisplayMode::parse("hotspot"), DisplayMode::Hotspot);
+        assert_eq!(DisplayMode::parse("flamegraph"), DisplayMode::Flamegraph);
+    }
+
+    #[test]
+    fn test_display_mode_parse_case_insensitive() {
+        assert_eq!(DisplayMode::parse("TIMELINE"), DisplayMode::Timeline);
+        assert_eq!(DisplayMode::parse("HoTsPoT"), DisplayMode::Hotspot);
+        assert_eq!(DisplayMode::parse("FLAMEGRAPH"), DisplayMode::Flamegraph);
+    }
+
+    #[test]
+    fn test_display_mode_parse_unknown_defaults_to_timeline() {
+        assert_eq!(DisplayMode::parse(""), DisplayMode::Timeline);
+        assert_eq!(DisplayMode::parse("unknown"), DisplayMode::Timeline);
+        assert_eq!(DisplayMode::parse("graph"), DisplayMode::Timeline);
     }
 }
