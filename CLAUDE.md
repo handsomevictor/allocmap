@@ -438,3 +438,23 @@ Orchestrator 收到启动信号后，第一步必须执行：
 cd /home/admin/allocmap
 claude --dangerously-skip-permissions
 ```
+
+## 十一、断点恢复规范
+
+每次迭代开始时，Orchestrator 必须立即更新
+`.claude/state/iteration_state.json`，写入当前迭代编号和当前步骤。
+
+每个子 Agent 完成任务后，必须立即将结果写入对应文件
+（progress.md、review_reports/ 等），不得只保留在内存中。
+
+Orchestrator 必须在每个 step 完成后立即更新
+`.claude/state/checkpoint.md`，格式如下：
+
+\`\`\`
+当前状态：Phase X - Iter XX - Step N（如 step3_reviewer_running）
+上一步完成：[描述]
+下一步待做：[描述]
+最后更新：[时间]
+\`\`\`
+
+这确保任何时刻中断后，恢复 prompt 能从文件状态精确定位继续点。
