@@ -3,7 +3,7 @@
 [![构建状态](https://img.shields.io/github/actions/workflow/status/handsomevictor/allocmap/ci.yml?branch=main&style=flat-square&label=构建)](https://github.com/handsomevictor/allocmap/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![版本](https://img.shields.io/badge/version-0.1.0-orange?style=flat-square)](Cargo.toml)
-[![平台](https://img.shields.io/badge/platform-Linux-lightgrey?style=flat-square)](#安装)
+[![平台](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey?style=flat-square)](#安装)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange?style=flat-square)](https://www.rust-lang.org)
 
 **AllocMap** 是一个面向 Linux 平台的命令行内存分析工具，专为 Rust、C、C++、Go 开发者以及 DevOps 工程师设计。无需重启目标进程，随时 attach，实时观察堆内存的时序变化与分配热点。
@@ -29,8 +29,9 @@ allocmap attach --pid $(pidof my_service)
 - **双模式采样**：`ptrace` 模式适用于已运行进程；`LD_PRELOAD` 模式在进程启动时注入，数据更完整
 - **彩色 TUI 界面**：基于 `ratatui` 的丰富彩色终端界面，绿/黄/红三色表示内存状态，信息密度高、可读性强
 - **非交互快照**：`snapshot` 命令输出 JSON 格式报告，天然兼容 CI/CD 流水线
-- **录制与回放**（Phase 2）：将采样数据录制为 `.amr` 文件，可在任意时间完整回放分析
-- **版本对比**（Phase 2）：`diff` 命令逐函数对比两个录制文件，快速定位性能回归
+- **录制与回放**：将采样数据录制为 `.amr` 文件，`allocmap replay` 支持变速播放、时间范围裁剪、Space 暂停
+- **版本 Diff 对比**：`allocmap diff` 逐函数对比两个录制文件，颜色标注变化幅度，快速定位内存回归
+- **macOS 支持**（实验性）：`allocmap run` 使用 `DYLD_INSERT_LIBRARIES` 注入，基础 RSS 监控已可用
 
 ## 与同类工具对比
 
@@ -38,12 +39,12 @@ allocmap attach --pid $(pidof my_service)
 |------|:--------:|:---------------:|:---------:|:---------:|:------:|
 | attach 到运行中进程 | ✅ | ❌ 需重启 | ❌ 需重启 | ❌ 需重启 | ❌ 需重启 |
 | 实时 TUI 时序图 | ✅ | ❌ | ❌ | ❌ Web UI | ❌ Web UI |
-| 录制与回放 | ✅（Phase 2） | ❌ | ❌ | 有限 | ❌ |
-| 版本 diff 对比 | ✅（Phase 2） | ❌ | ❌ | ❌ | ❌ |
+| 录制与回放 | ✅ | ❌ | ❌ | 有限 | ❌ |
+| 版本 diff 对比 | ✅ | ❌ | ❌ | ❌ | ❌ |
 | 性能开销 | 低（< 5%） | 极高（10–50x） | 低（< 5%） | 低（< 5%） | 低（< 5%） |
 | 跨语言支持 | ✅ | ✅ | ✅ | ✅ | ❌ 仅 Python |
 | Linux 支持 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| macOS 支持 | 计划中（Phase 2） | 有限 | ❌ | ❌ | ❌ |
+| macOS 支持 | 实验性（Phase 2 Iter 01） | 有限 | ❌ | ❌ | ❌ |
 | 纯终端（无 GUI） | ✅ | ✅ | ❌ 需 GUI | ❌ 需浏览器 | ❌ 需浏览器 |
 | 零源码修改 | ✅ | ✅ | ✅ | ✅ | ❌ |
 
@@ -51,7 +52,7 @@ allocmap attach --pid $(pidof my_service)
 
 ### 前置要求
 
-- Linux（Kernel 4.4+，x86_64）
+- Linux（Kernel 4.4+，x86_64）或 macOS（实验性支持）
 - Docker（推荐，用于构建；EC2 宿主机未预装 Rust）
 - 或：Rust 工具链 1.75+
 
@@ -109,19 +110,25 @@ allocmap attach --pid $(pidof my_service)
 # 2. 采样 30 秒后自动退出，保存 JSON 报告
 allocmap attach --pid 1234 --duration 30s --output report.json
 
-# 3. 录制数据供后续分析（Phase 2 功能）
+# 3. 录制数据供后续回放分析
 allocmap attach --pid 1234 --record session.amr
 
-# 4. 显示前 30 个分配热点
+# 4. 回放录制文件（TUI 界面，支持变速 / 暂停）
+allocmap replay session.amr --speed 2.0
+
+# 5. 对比两次录制，定位内存回归
+allocmap diff baseline.amr current.amr --min-change-pct 10
+
+# 6. 显示前 30 个分配热点
 allocmap attach --pid 1234 --top 30
 
-# 5. 以 LD_PRELOAD 模式启动新进程（数据更完整）
+# 7. 以 LD_PRELOAD 模式启动新进程（数据更完整）
 allocmap run -- ./my_binary --arg1 --arg2
 
-# 6. 非交互式快照，输出 JSON（适合 CI/CD）
+# 8. 非交互式快照，输出 JSON（适合 CI/CD）
 allocmap snapshot --pid 1234 --duration 5s
 
-# 7. 将快照保存到文件
+# 9. 将快照保存到文件
 allocmap snapshot --pid 1234 --duration 10s --output snapshot.json
 ```
 
@@ -242,7 +249,7 @@ docker run --rm --cap-add=SYS_PTRACE --security-opt seccomp:unconfined \
   allocmap-dev bash -c "rustup component add clippy && cargo clippy --workspace -- -D warnings"
 ```
 
-当前测试状态（Phase 1 Iter 02，已完成）：
+当前测试状态（Phase 2 Iter 01）：
 
 | Crate | 测试数 | 状态 |
 |-------|--------|------|
@@ -250,8 +257,8 @@ docker run --rm --cap-add=SYS_PTRACE --security-opt seccomp:unconfined \
 | allocmap-ptrace | 13 | 通过 |
 | allocmap-preload | 4 | 通过 |
 | allocmap-tui | 14 | 通过 |
-| allocmap-cli | 21 | 通过 |
-| **合计** | **55** | **全部通过** |
+| allocmap-cli | 30 | 通过 |
+| **合计** | **64** | **全部通过** |
 
 ### 内置测试目标程序
 
@@ -279,15 +286,24 @@ allocmap snapshot --pid $! --duration 5s
 - [x] 完整测试覆盖（55 tests，全部通过）
 - [x] Reviewer PASSED，Tester PASSED（snapshot 146 frames, peak 2.1MB）
 
-### Phase 2 — 完整产品（计划中）
+### Phase 2 — 完整产品（🚧 进行中）
 
-- [ ] `allocmap replay` — `.amr` 文件回放，支持变速、跳转
-- [ ] `allocmap diff` — 两个录制文件的逐函数对比
-- [ ] `.amr` 格式完整实现（流式写入 + 回放）
-- [ ] macOS 支持（`task_for_pid` + `DYLD_INSERT_LIBRARIES`）
-- [ ] 多线程视图（`PTRACE_O_TRACECLONE`，`/proc/PID/task/`）
-- [ ] 集成测试套件
+#### Iter 01（✅ 已完成，2026-03-26）
+
+- [x] `allocmap replay` — `.amr` 文件回放，支持 `--from`/`--to`/`--speed`，Space 暂停，+/- 变速
+- [x] `allocmap diff` — 两个录制文件的逐函数对比，颜色标注变化幅度，`--min-change-pct` 过滤
+- [x] macOS 基础支持：`DYLD_INSERT_LIBRARIES` 注入，`ps -o rss=` RSS 监控
+- [x] 多线程枚举框架：`list_threads()` 读取 `/proc/PID/task/`
+- [x] TUI 回放状态字段（`is_replay`、`replay_speed`、`replay_paused`）
+- [x] 64 tests，全部通过，Reviewer PASSED，Tester PASSED
+
+#### Iter 02（计划中）
+
+- [ ] `allocmap replay` Space 暂停真正中断帧推送（当前仅更新显示状态）
+- [ ] macOS `task_for_pid` 完整实现（分配热点支持）
+- [ ] 多线程视图（`PTRACE_O_TRACECLONE`，每线程独立 TUI 数据显示）
 - [ ] 火焰图视图（当前为占位符）
+- [ ] 集成测试套件
 
 ## License
 

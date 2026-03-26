@@ -100,10 +100,16 @@ pub async fn run_tui_loop(
 
             // ── Header ─────────────────────────────────────────────────────────
             let elapsed = app.elapsed_secs();
+            let replay_tag = if app.is_replay {
+                format!(" (REPLAY ×{:.2})", app.replay_speed)
+            } else {
+                String::new()
+            };
             let header_text = format!(
-                " allocmap · pid={} ({}) · {:02}:{:02}:{:02} · {} samples ",
+                " allocmap · pid={} ({}){} · {:02}:{:02}:{:02} · {} samples ",
                 app.pid,
                 app.program_name,
+                replay_tag,
                 elapsed / 3600,
                 (elapsed % 3600) / 60,
                 elapsed % 60,
@@ -167,9 +173,12 @@ pub async fn run_tui_loop(
             }
 
             // ── Keybindings hint ───────────────────────────────────────────────
-            let keys = Paragraph::new(
-                " [q]quit  [t]timeline  [h]hotspot  [f]flamegraph  [↑↓]scroll  [Enter]expand ",
-            )
+            let keys_text = if app.is_replay {
+                " [q]quit  [t]timeline  [h]hotspot  [Space]pause  [+/-]speed  [↑↓]scroll  [Enter]expand "
+            } else {
+                " [q]quit  [t]timeline  [h]hotspot  [f]flamegraph  [↑↓]scroll  [Enter]expand "
+            };
+            let keys = Paragraph::new(keys_text)
             .style(Style::default().fg(Color::DarkGray));
             f.render_widget(keys, chunks[3]);
         })?;

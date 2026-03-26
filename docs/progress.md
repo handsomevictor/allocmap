@@ -217,4 +217,91 @@
 
 ---
 
+## Phase 2 — Iter 01（2026-03-26）
+
+### 迭代目标
+
+实现 Phase 2 核心功能：`allocmap replay`、`allocmap diff`、macOS 平台支持基础结构，以及多线程追踪的初步框架。
+
+### 构建与测试结果
+
+| 检查项 | 结果 |
+|--------|------|
+| `cargo build --release` | PASSED |
+| `cargo clippy --workspace -- -D warnings` | PASSED（0 warnings） |
+| `cargo test --workspace` | PASSED（64 tests，0 failures） |
+| Reviewer | PASSED |
+| Tester | PASSED |
+
+### 新增 / 修改的文件
+
+#### allocmap-cli（新增子命令）
+
+- **`crates/allocmap-cli/src/cmd/replay.rs`**（新文件）：
+  - `allocmap replay <file.amr>` 命令实现
+  - 支持选项：`--from <offset_ms>`、`--to <offset_ms>`、`--speed <倍速>`
+  - 读取 `.amr` 文件，按时间偏移过滤帧，以正确节奏向 TUI 送帧
+  - 键盘支持：`Space` = 暂停/继续，`+`/`-` = 加速/减速
+
+- **`crates/allocmap-cli/src/cmd/diff.rs`**（新文件）：
+  - `allocmap diff <baseline.amr> <current.amr>` 命令实现
+  - 对比两个录制文件，按绝对字节差降序排列
+  - `--min-change-pct <pct>` 过滤选项（只显示变化超过阈值的热点）
+  - 彩色输出：变化 ≥ 10% 用黄色标注，≥ 50% 用红色标注
+
+- **`crates/allocmap-cli/src/cmd/run.rs`**（修改）：
+  - 新增 macOS 平台支持：`#[cfg(target_os = "macos")]` 下使用 `DYLD_INSERT_LIBRARIES` 替代 `LD_PRELOAD`
+  - `#[cfg(target_os = "linux")]` 和 `#[cfg(target_os = "macos")]` 平台条件编译隔离
+
+#### allocmap-ptrace（新增 macOS 支持 + 多线程框架）
+
+- **`crates/allocmap-ptrace/src/macos_sampler.rs`**（新文件）：
+  - macOS 平台采样器存根（`#[cfg(target_os = "macos")]`）
+  - 当前实现：使用 `ps -o rss=` 读取进程内存大小
+  - `task_for_pid` 完整实现推迟至 iter02
+  - `top_sites` 在 macOS 下当前返回空列表
+
+- **`crates/allocmap-ptrace/src/attach.rs`**（修改）：
+  - 新增 `list_threads(pid: u32) -> Vec<u32>` 函数
+  - 读取 `/proc/{pid}/task/` 目录枚举所有线程 ID
+  - 注：当前 `list_threads` 结果仅收集，尚未在 TUI 中分线程显示
+
+#### allocmap-tui（回放状态支持）
+
+- **`crates/allocmap-tui/src/app.rs`**（修改）：
+  - `App` 结构体新增字段：`is_replay: bool`、`replay_speed: f64`、`replay_paused: bool`
+  - 支持在回放模式下在 TUI 标题栏显示回放速度和暂停状态
+
+### 关键设计决策
+
+#### macOS 平台隔离策略
+
+采用 Rust `#[cfg(target_os)]` 条件编译在单一代码库中支持双平台，而非维护两套代码：
+- Linux 路径：`LD_PRELOAD` + `ptrace(2)` + `/proc/PID/status`
+- macOS 路径：`DYLD_INSERT_LIBRARIES` + `ps -o rss=` 存根（`task_for_pid` 待 iter02）
+
+这确保 `cargo build` 在两个平台上均可通过，且无需 feature flags。
+
+#### replay 帧定时设计
+
+replay 命令读取相邻帧的 `timestamp_ms` 差值来计算等待时间，并除以 `--speed` 倍数。这确保：
+1. 录制的真实时间节奏得以还原
+2. 变速播放的计算简单且精确
+3. 采样间隔不均匀（如采样丢帧）时依然正确
+
+### 已知限制（待 iter02 改进）
+
+- `replay_paused` 标志已更新 App 状态，但暂停逻辑尚未传播到 feeder 任务（Space 键显示暂停但不中断帧推送）
+- macOS `top_sites` 永远为空（`ps` 方式仅能获取 RSS 总量，无法区分分配热点）
+- `list_threads()` 结果当前被丢弃，未在 TUI 中展示每线程独立数据
+- `PTRACE_O_TRACECLONE` 自动追踪新线程尚未实现
+
+### 验收状态
+
+- **Reviewer**: PASSED（0 clippy warnings）
+- **Tester**: PASSED（64 tests，0 failures）
+- **Phase 2 Iter 01 状态：COMPLETED ✅，进入 Iter 02**
+
+---
+
 <!-- 后续迭代记录由 Doc Agent 在每次迭代后追加 -->

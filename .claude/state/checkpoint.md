@@ -1,19 +1,10 @@
-当前状态：Phase 1 - COMPLETED (iter02 Reviewer+Tester 双通过)
-上一步完成：Reviewer PASSED + Tester PASSED（55 tests, 0 warnings, snapshot 146 frames）
-下一步待做：Doc 更新文档 → git commit + push → 开始 Phase 2 iter01
-最后更新：2026-03-26T04:00:00Z
+当前状态：Phase 2 - Iter 01 - Step 5（step5_doc_running）
+上一步完成：Reviewer PASSED + Tester PASSED (64 tests, all commands verified)
+下一步待做：Doc agent 完成 → DevOps git commit+push → Phase 2 评估是否需要 iter02
+最后更新：2026-03-26T07:10:00Z
 
-Phase 1 最终状态：
-- cargo build: PASSED
-- cargo build --release: PASSED
-- cargo clippy -- -D warnings: 0 warnings
-- cargo test: 55 PASSED
-- allocmap snapshot: 146 samples, peak 2.1MB
-- Reviewer: PASSED
-- Tester: PASSED
-
-Phase 2 计划：
-- allocmap replay <file.amr>
-- allocmap diff <baseline.amr> <current.amr>
-- macOS support (DYLD_INSERT_LIBRARIES / task_for_pid)
-- Multi-thread tracking
+Phase 2 Iter 01 目标：
+1. allocmap-replay: replay <file.amr> 命令 + TUI（Space暂停, +/-速度, g跳转）
+2. allocmap-diff: diff <baseline.amr> <current.amr> 表格输出（>10%黄色, >50%红色）
+3. macOS: DYLD_INSERT_LIBRARIES（preload）+ task_for_pid（attach）cfg隔离
+4. multi-thread: PTRACE_O_TRACECLONE + /proc/PID/task/ 线程列表

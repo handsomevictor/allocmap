@@ -38,6 +38,12 @@ pub struct App {
     pub hotspot_expanded: Vec<bool>,
     pub total_samples: u64,
     pub start_time: Instant,
+    /// True when replaying an .amr file rather than live sampling
+    pub is_replay: bool,
+    /// Playback speed multiplier (1.0 = real-time)
+    pub replay_speed: f64,
+    /// Whether replay is currently paused
+    pub replay_paused: bool,
 }
 
 impl App {
@@ -53,6 +59,9 @@ impl App {
             hotspot_expanded: Vec::new(),
             total_samples: 0,
             start_time: Instant::now(),
+            is_replay: false,
+            replay_speed: 1.0,
+            replay_paused: false,
         }
     }
 
@@ -156,6 +165,15 @@ impl App {
                 if idx < self.hotspot_expanded.len() {
                     self.hotspot_expanded[idx] = !self.hotspot_expanded[idx];
                 }
+            }
+            KeyCode::Char(' ') if self.is_replay => {
+                self.replay_paused = !self.replay_paused;
+            }
+            KeyCode::Char('+') | KeyCode::Char('=') => {
+                self.replay_speed = (self.replay_speed * 2.0).min(32.0);
+            }
+            KeyCode::Char('-') => {
+                self.replay_speed = (self.replay_speed / 2.0).max(0.125);
             }
             _ => {}
         }

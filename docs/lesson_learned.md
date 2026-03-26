@@ -124,4 +124,74 @@
 
 ---
 
-*最后更新：Phase 1 Iter 02（2026-03-26）*
+## Phase 2 — Iter 01（2026-03-26）
+
+### 经验：Rust cfg 条件编译是跨平台隔离的正确方式
+
+**背景**：Phase 2 需要同时支持 Linux（ptrace）和 macOS（task_for_pid），两个平台的采样 API 完全不同。
+
+**问题**：若维护两套独立代码分支，代码库体积增大，同步维护成本高，且容易出现"只修了一个平台"的 bug。
+
+**解决方案**：
+- 在同一函数/模块内使用 `#[cfg(target_os = "linux")]` 和 `#[cfg(target_os = "macos")]` 隔离平台差异
+- 不使用 Cargo feature flags 切换平台（feature flags 更适合功能开关，平台差异用 cfg 更自然）
+- 对于较大的平台特定实现，新建独立文件（如 `macos_sampler.rs`），通过 `#[cfg(target_os = "macos")] mod macos_sampler;` 条件包含
+
+**教训**：
+1. `#[cfg(target_os)]` 比 `#[cfg(feature = "macos")]` 更符合"平台支持"的语义
+2. 条件编译块应尽量小，公共接口保持统一，只在实现层面分叉
+3. 即使 macOS 实现是存根（stub），也应保证在 macOS 上 `cargo build` 通过，以便 CI 提前发现问题
+
+---
+
+### 经验：replay 帧定时应基于录制时间戳差值，而非固定间隔
+
+**背景**：`allocmap replay` 需要以接近真实节奏播放录制文件中的帧序列。
+
+**问题**：如果固定使用 `1000ms / sample_rate` 作为帧间隔，当录制期间采样丢帧（如目标进程短暂不响应）时，回放会"压缩"那段时间，丢失了真实的时间感。
+
+**解决方案**：计算相邻帧的 `timestamp_ms` 差值作为等待时间，再除以 `--speed` 倍数。代码逻辑：
+```
+sleep_ms = (frame[i+1].timestamp_ms - frame[i].timestamp_ms) / speed
+```
+
+**教训**：
+1. 录制文件中保存绝对时间戳（而非间隔）是正确选择，使回放逻辑大幅简化
+2. 变速播放只需除法，无需特殊处理
+3. Phase 1 `.amr` 格式中 `SampleFrame.timestamp_ms` 的设计决策在 Phase 2 得到了验证
+
+---
+
+### 经验：状态标志的传播需要贯穿整个数据流
+
+**背景**：`replay_paused` 标志添加到了 TUI `App` 结构体，用于 Space 键切换暂停状态。
+
+**问题**：TUI `App` 中的 `replay_paused` 字段更新后，负责向 TUI 推送帧的 feeder 任务（运行在独立 Tokio 任务中）并不读取这个字段，导致暂停按键只改变显示状态，不实际暂停帧的推送。
+
+**根因**：feeder 任务和 TUI 任务通过 `mpsc::channel` 通信，但缺少反向的控制信号通路。
+
+**修复方向（iter02）**：新增一个 `tokio::sync::watch` 或 `Mutex<bool>` 共享标志，feeder 任务在每帧推送前检查该标志，若暂停则 `sleep` 等待。
+
+**教训**：
+1. UI 状态和后台任务状态是两个不同的层，需要显式的跨任务通信机制来同步
+2. 设计异步系统时，应在架构层面明确"谁控制谁、如何传递信号"，而不是在实现后发现遗漏
+3. 这类问题在 review 阶段容易被发现（Reviewer 可以静态分析控制流），应列入 Reviewer checklist
+
+---
+
+### 经验：/proc/PID/task/ 枚举线程需要注意竞态
+
+**背景**：`list_threads(pid)` 通过读取 `/proc/{pid}/task/` 目录来枚举目标进程的所有线程。
+
+**问题**：目录读取（`fs::read_dir`）和 ptrace 操作之间存在竞态——某个线程可能在我们读完目录但还未 attach 时退出，导致后续 ptrace 调用返回 `ESRCH`。
+
+**当前处理**：`list_threads()` 返回线程 ID 列表，调用方负责处理 `ESRCH` 错误（忽略已退出的线程）。每次采样前重新调用 `list_threads()` 以获取最新线程列表，而非缓存。
+
+**教训**：
+1. 多线程进程的线程集合是动态变化的，不能假设"枚举时获取的列表"在操作时依然有效
+2. 系统级代码中，所有"先读后操作"的模式都应考虑 TOCTOU 竞态
+3. `ESRCH` 应被视为正常情况，而非错误，在 ptrace 代码的循环中应 continue 而非 break
+
+---
+
+*最后更新：Phase 2 Iter 01（2026-03-26）*

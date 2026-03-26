@@ -84,7 +84,10 @@ impl PtraceSampler {
             }
         }
 
-        // Read heap information from /proc/<pid>/status
+        // Read heap information from /proc/<pid>/status.
+        // VmRSS already aggregates all threads in the process.
+        // thread_count is available via list_threads() for future per-thread view.
+        let _thread_count = crate::attach::list_threads(self.pid);
         let heap_bytes = get_heap_bytes(self.pid).unwrap_or(0);
 
         // Capture a backtrace for the current execution point

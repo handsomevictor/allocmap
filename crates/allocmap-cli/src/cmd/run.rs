@@ -39,10 +39,18 @@ pub async fn execute(args: RunArgs) -> Result<()> {
         .first()
         .ok_or_else(|| anyhow::anyhow!("No command specified."))?;
 
+    #[cfg(target_os = "linux")]
+    let inject_var = "LD_PRELOAD";
+    #[cfg(target_os = "macos")]
+    let inject_var = "DYLD_INSERT_LIBRARIES";
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    anyhow::bail!("The 'run' command is only supported on Linux and macOS.");
+
     println!(
-        "{} Launching {} with LD_PRELOAD injection...",
+        "{} Launching {} with {} injection...",
         "→".cyan().bold(),
-        program.yellow()
+        program.yellow(),
+        inject_var
     );
 
     // Validate --env format early
@@ -70,7 +78,10 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     // Build and spawn the child process
     let mut cmd = std::process::Command::new(&args.command[0]);
     cmd.args(&args.command[1..]);
+    #[cfg(target_os = "linux")]
     cmd.env("LD_PRELOAD", &so_path);
+    #[cfg(target_os = "macos")]
+    cmd.env("DYLD_INSERT_LIBRARIES", &so_path);
     cmd.env("ALLOCMAP_SOCKET_PATH", &socket_path);
 
     for env_var in &args.env_vars {
@@ -85,8 +96,8 @@ pub async fn execute(args: RunArgs) -> Result<()> {
 
     let child_pid = child.id();
     eprintln!(
-        "Started '{}' with PID {} (LD_PRELOAD mode)",
-        args.command[0], child_pid
+        "Started '{}' with PID {} ({} mode)",
+        args.command[0], child_pid, inject_var
     );
 
     let program_name = std::path::Path::new(&args.command[0])
@@ -145,9 +156,6 @@ pub async fn execute(args: RunArgs) -> Result<()> {
             }
         }
     }
-
-    #[cfg(not(target_os = "linux"))]
-    anyhow::bail!("The 'run' command is only supported on Linux.");
 
     // ----- Non-interactive JSON output mode -----
     if let Some(output_path) = &args.output {
@@ -244,18 +252,26 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     Ok(())
 }
 
-/// Locate `liballocmap_preload.so` relative to the current executable or project root.
+/// Locate the preload shared library relative to the current executable or project root.
+/// On Linux the library is `liballocmap_preload.so`; on macOS it is `liballocmap_preload.dylib`.
 fn find_preload_so() -> Result<std::path::PathBuf> {
+    #[cfg(target_os = "linux")]
+    let so_name = "liballocmap_preload.so";
+    #[cfg(target_os = "macos")]
+    let so_name = "liballocmap_preload.dylib";
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let so_name = "liballocmap_preload.so"; // fallback for unsupported platforms
+
     let exe_path = std::env::current_exe()?;
     let exe_dir = exe_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
 
     let candidates = vec![
-        exe_dir.join("liballocmap_preload.so"),
-        exe_dir.join("../lib/liballocmap_preload.so"),
-        std::path::PathBuf::from("target/debug/liballocmap_preload.so"),
-        std::path::PathBuf::from("target/release/liballocmap_preload.so"),
+        exe_dir.join(so_name),
+        exe_dir.join(format!("../lib/{}", so_name)),
+        std::path::PathBuf::from(format!("target/debug/{}", so_name)),
+        std::path::PathBuf::from(format!("target/release/{}", so_name)),
     ];
 
     for path in &candidates {
@@ -265,8 +281,9 @@ fn find_preload_so() -> Result<std::path::PathBuf> {
     }
 
     anyhow::bail!(
-        "Cannot find liballocmap_preload.so. Looked in: {:?}. \
+        "Cannot find {}. Looked in: {:?}. \
          Build the project first with 'cargo build', then run from the project root.",
+        so_name,
         candidates
     )
 }

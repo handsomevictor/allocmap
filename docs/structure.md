@@ -29,18 +29,24 @@ allocmap/
 │   │                                   #   - read_from<R: Read>：读取并校验格式，按 frame_count 读帧
 │   │                                   #   - 3 个单元测试（roundtrip、invalid magic、version mismatch）
 │   │
-│   ├── allocmap-ptrace/                # ptrace 采样实现（仅 Linux，#[cfg(target_os = "linux")]）
+│   ├── allocmap-ptrace/                # ptrace 采样实现（Linux primary，macOS stub）
 │   │   ├── Cargo.toml                  # 依赖：nix（ptrace/process/signal）、addr2line、libc
 │   │   └── src/
-│   │       ├── lib.rs                  # crate 入口，compile_error! on non-Linux
+│   │       ├── lib.rs                  # crate 入口，平台特性 re-export
 │   │       ├── attach.rs               # attach/detach/get_heap_bytes/process_exists 函数
 │   │       │                           #   - PtraceAttach RAII 包装（Drop 时自动 detach）
 │   │       │                           #   - get_heap_bytes 读 /proc/PID/status VmRSS
+│   │       │                           #   - list_threads(pid) 读 /proc/{pid}/task/ 枚举线程（Phase 2 Iter 01 新增）
 │   │       │                           #   - 4 个单元测试
-│   │       ├── sampler.rs              # PtraceSampler：定频采样循环
+│   │       ├── sampler.rs              # PtraceSampler：定频采样循环（Linux）
 │   │       │                           #   - attach(pid: u32) 构建采样器
 │   │       │                           #   - sample() → SampleFrame（SIGSTOP→waitpid→读栈→PTRACE_CONT）
 │   │       │                           #   - 3 个单元测试
+│   │       ├── macos_sampler.rs        # macOS 平台采样器存根（Phase 2 Iter 01 新增）
+│   │       │                           #   - #[cfg(target_os = "macos")] 条件编译
+│   │       │                           #   - 当前实现：ps -o rss= 读取 RSS 总量
+│   │       │                           #   - task_for_pid 完整实现推迟至 iter02
+│   │       │                           #   - top_sites 当前返回空列表
 │   │       ├── backtrace.rs            # 栈回溯：frame-pointer unwinding（x86_64 only）
 │   │       │                           #   - collect_backtrace(pid, max_frames) → Vec<u64>
 │   │       │                           #   - read_u64_remote（ptrace::read 读远端内存）
@@ -77,7 +83,8 @@ allocmap/
 │   │       ├── app.rs                  # App 状态管理
 │   │       │                           #   - frames: VecDeque<SampleFrame>（最多 500 帧）
 │   │       │                           #   - DisplayMode（Timeline/Hotspot/Flamegraph）
-│   │       │                           #   - on_key() 处理键盘事件（q/t/h/f/↑↓/Enter）
+│   │       │                           #   - is_replay / replay_speed / replay_paused（Phase 2 Iter 01 新增）
+│   │       │                           #   - on_key() 处理键盘事件（q/t/h/f/Space/+/-/↑↓/Enter）
 │   │       │                           #   - 13 个单元测试（iter02 新增）
 │   │       ├── timeline.rs             # 内存时序图组件
 │   │       │                           #   - Unicode block-character 柱状图
@@ -108,7 +115,16 @@ allocmap/
 │               ├── run.rs              # run 命令实现
 │               │                       #   - find_preload_so() 定位 liballocmap_preload.so
 │               │                       #   - 创建 Unix socket，spawn 子进程（LD_PRELOAD 注入）
-│               │                       #   - 回退到 ptrace 采样（LD_PRELOAD IPC 待 iter02 完成）
+│               │                       #   - Linux: LD_PRELOAD 注入；macOS: DYLD_INSERT_LIBRARIES
+│               │                       #   - #[cfg(target_os)] 平台条件编译隔离
+│               ├── replay.rs           # replay 命令实现（Phase 2 Iter 01 新增）
+│               │                       #   - 读取 .amr 文件，按 --from/--to 过滤时间范围
+│               │                       #   - 以 timestamp_ms 差值 / speed 计算帧间延迟
+│               │                       #   - 支持 Space=暂停/继续，+/-=加减速
+│               ├── diff.rs             # diff 命令实现（Phase 2 Iter 01 新增）
+│               │                       #   - 对比 baseline.amr 与 current.amr 两个录制文件
+│               │                       #   - --min-change-pct 过滤阈值选项
+│               │                       #   - 彩色输出：≥10% 黄色，≥50% 红色，按绝对字节差降序
 │               └── snapshot.rs         # snapshot 命令实现
 │                                       #   - spawn_blocking 内完成 attach + 采样（ptrace 线程约束）
 │                                       #   - 输出 JSON：sample_count、peak_heap、avg_heap、top_sites
@@ -223,7 +239,7 @@ allocmap/
 
 ### allocmap-cli（命令行入口）
 
-基于 `clap 4`（derive 特性）的 CLI 入口。三个子命令各自实现独立的 `execute()` async 函数。所有 user-visible error messages 均为英文，格式清晰：
+基于 `clap 4`（derive 特性）的 CLI 入口。五个子命令各自实现独立的 `execute()` async 函数（Phase 2 Iter 01 新增 `replay` 和 `diff`）。所有 user-visible error messages 均为英文，格式清晰：
 ```
 Error: Process 99999 not found. Make sure the PID is correct and the process is running.
 Error: Invalid duration 'xyz': expected format like 30s, 5m, 1h
@@ -231,4 +247,4 @@ Error: Invalid duration 'xyz': expected format like 30s, 5m, 1h
 
 ---
 
-*最后更新：Phase 1 Iter 02（2026-03-26）*
+*最后更新：Phase 2 Iter 01（2026-03-26）*

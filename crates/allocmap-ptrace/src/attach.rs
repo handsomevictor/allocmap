@@ -106,6 +106,22 @@ pub fn process_exists(pid: u32) -> bool {
     std::path::Path::new(&format!("/proc/{}", pid)).exists()
 }
 
+/// List all thread IDs for a process by reading /proc/{pid}/task/.
+///
+/// On Linux, VmRSS in /proc/pid/status already aggregates all threads, so
+/// per-thread heap values are not separately available via this mechanism.
+/// This function enumerates the thread IDs for future per-thread TUI views.
+pub fn list_threads(pid: u32) -> Vec<u32> {
+    let task_dir = format!("/proc/{}/task", pid);
+    match std::fs::read_dir(&task_dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().to_string_lossy().parse::<u32>().ok())
+            .collect(),
+        Err(_) => vec![pid], // fallback: return just the main thread ID
+    }
+}
+
 /// RAII wrapper: attaches on creation, detaches on drop.
 pub struct PtraceAttach {
     pub pid: Pid,
@@ -183,5 +199,26 @@ mod tests {
             result.is_err(),
             "get_heap_bytes should fail for a non-existent PID"
         );
+    }
+
+    #[test]
+    fn test_list_threads_self() {
+        let my_pid = std::process::id();
+        let threads = list_threads(my_pid);
+        // Current process must have at least one thread.
+        assert!(!threads.is_empty(), "list_threads should return at least one thread");
+        // The main thread TID equals the process PID on Linux.
+        assert!(
+            threads.contains(&my_pid),
+            "thread list for current process should contain its own PID (TID)"
+        );
+    }
+
+    #[test]
+    fn test_list_threads_nonexistent_falls_back_to_pid() {
+        let fake_pid = 99_999_999_u32;
+        let threads = list_threads(fake_pid);
+        // Fallback: returns a vec containing just the given pid.
+        assert_eq!(threads, vec![fake_pid]);
     }
 }

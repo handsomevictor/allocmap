@@ -1,16 +1,20 @@
 {
-  "current_phase": 1,
-  "current_iteration": "02",
-  "current_step": "step5_doc_commit",
+  "current_phase": 2,
+  "current_iteration": "01",
+  "current_step": "step1_developers_running",
   "phase1_iterations": 2,
-  "phase2_iterations": 0,
+  "phase2_iterations": 1,
   "phase1_status": "PASSED",
-  "phase2_status": "not_started",
-  "last_updated": "2026-03-26T04:00:00Z",
+  "phase2_status": "in_progress",
+  "last_updated": "2026-03-26T04:30:00Z",
   "phase1_passed": true,
   "phase2_passed": false,
-  "iter02_reviewer": "PASSED",
-  "iter02_tester": "PASSED",
-  "iter02_tests": "55_PASSED",
-  "iter02_clippy": "0_warnings"
+  "phase2_goals": [
+    "allocmap replay <file.amr>",
+    "allocmap diff <baseline.amr> <current.amr>",
+    "macOS support (DYLD_INSERT_LIBRARIES, task_for_pid)",
+    "multi-thread tracking (PTRACE_O_TRACECLONE)",
+    "replay UI: pause/speed/seek",
+    "diff output table with color"
+  ]
 }

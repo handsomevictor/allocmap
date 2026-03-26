@@ -3,7 +3,7 @@
 > 本文档涵盖 AllocMap 的所有已实现功能，逐一介绍使用方法、参数说明、预期输出和常见问题。
 > 每次迭代后由 Doc Agent 更新，确保与实际功能完全一致。
 >
-> **当前版本**：Phase 1 Iter 01（2026-03-26）
+> **当前版本**：Phase 2 Iter 01（2026-03-26）
 
 ---
 
@@ -14,10 +14,12 @@
 3. [allocmap attach](#allocmap-attach)
 4. [allocmap snapshot](#allocmap-snapshot)
 5. [allocmap run](#allocmap-run)
-6. [使用测试目标程序](#使用测试目标程序)
-7. [录制到 .amr 文件](#录制到-amr-文件)
-8. [TUI 界面详解](#tui-界面详解)
-9. [常见问题](#常见问题)
+6. [allocmap replay](#allocmap-replay)
+7. [allocmap diff](#allocmap-diff)
+8. [使用测试目标程序](#使用测试目标程序)
+9. [录制到 .amr 文件](#录制到-amr-文件)
+10. [TUI 界面详解](#tui-界面详解)
+11. [常见问题](#常见问题)
 
 ---
 
@@ -337,6 +339,197 @@ Options:
 
 ---
 
+## allocmap replay
+
+**功能**：回放录制的 `.amr` 文件，还原当时的 TUI 界面，支持变速播放和时间范围裁剪。
+
+> **注意**：回放功能为 Phase 2 新增。需先通过 `allocmap attach --record` 或 `allocmap run --record` 录制 `.amr` 文件。
+
+### 基本用法
+
+```bash
+# 以正常速度回放录制文件
+allocmap replay session.amr
+
+# 以 2 倍速回放
+allocmap replay session.amr --speed 2.0
+
+# 以 0.5 倍速慢放（方便观察细节）
+allocmap replay session.amr --speed 0.5
+
+# 只回放录制的前 30 秒
+allocmap replay session.amr --to 30000
+
+# 跳过前 10 秒，从第 10 秒开始回放
+allocmap replay session.amr --from 10000
+
+# 只回放第 10 秒到第 40 秒的片段
+allocmap replay session.amr --from 10000 --to 40000
+```
+
+### 完整参数列表
+
+```
+allocmap replay <FILE> [OPTIONS]
+
+Arguments:
+  <FILE>               .amr 录制文件路径 [required]
+
+Options:
+  --from <MS>          从指定时间偏移（毫秒）开始回放 [default: 0]
+  --to <MS>            在指定时间偏移（毫秒）停止回放 [default: 文件末尾]
+  --speed <MULTIPLIER> 回放倍速（1.0=原速，2.0=2倍速，0.5=半速）[default: 1.0]
+```
+
+### 回放时的键盘快捷键
+
+| 键 | 功能 |
+|----|------|
+| `Space` | 暂停 / 继续回放 |
+| `+` | 加速（倍速 +0.5） |
+| `-` | 减速（倍速 -0.5，最低 0.1） |
+| `q` / `Ctrl+C` | 退出回放 |
+| `t` | 切换到时序图视图 |
+| `h` | 切换到热点列表视图 |
+| `↑` / `↓` | 在热点列表中滚动 |
+| `Enter` | 展开 / 折叠热点调用栈 |
+
+### TUI 标题栏回放状态示例
+
+```
+╭─ allocmap · REPLAY · session.amr · 1.0x · 45s / 120s ──────────────╮
+│ LIVE HEAP: 85.2 MB  △ +8.3MB/s  ALLOCS: 1502/s  FREES: 210/s       │
+...
+```
+
+- 标题栏显示 `REPLAY` 标识，以及当前回放速度（如 `1.0x`）
+- 暂停时显示 `[PAUSED]` 标识
+
+### 完整工作流示例
+
+```bash
+# 第一步：对目标程序进行 60 秒录制
+./tests/target_programs/leak_linear/target/debug/leak_linear &
+LEAK_PID=$!
+allocmap attach --pid $LEAK_PID --duration 60s --record leak_session.amr
+kill $LEAK_PID
+
+# 第二步：回放录制，以 2 倍速快速浏览
+allocmap replay leak_session.amr --speed 2.0
+
+# 第三步：聚焦分析第 20-40 秒的内存激增片段，用半速仔细观察
+allocmap replay leak_session.amr --from 20000 --to 40000 --speed 0.5
+```
+
+### 已知限制（Phase 2 Iter 01）
+
+- `Space` 暂停键更新 TUI 状态显示，但当前不中断帧推送（将在 iter02 修复）
+- 不支持通过键盘跳转到指定时间点（计划 iter02 以 `g` 键实现）
+
+---
+
+## allocmap diff
+
+**功能**：对比两个 `.amr` 录制文件，逐函数展示内存分配的变化量，快速定位性能回归或内存使用变化。
+
+> **注意**：diff 功能为 Phase 2 新增，适合对比"优化前"与"优化后"的录制结果，也适合 CI/CD 集成用于检测回归。
+
+### 基本用法
+
+```bash
+# 对比 baseline 和 current 两次录制
+allocmap diff baseline.amr current.amr
+
+# 只显示变化超过 20% 的函数
+allocmap diff baseline.amr current.amr --min-change-pct 20
+
+# 将结果保存为文本文件
+allocmap diff baseline.amr current.amr > diff_report.txt
+```
+
+### 完整参数列表
+
+```
+allocmap diff <BASELINE> <CURRENT> [OPTIONS]
+
+Arguments:
+  <BASELINE>           基准录制文件（旧版本）[required]
+  <CURRENT>            当前录制文件（新版本）[required]
+
+Options:
+  --min-change-pct <PCT>   只显示变化幅度 ≥ PCT% 的函数 [default: 0]
+```
+
+### 预期输出格式
+
+```bash
+allocmap diff v1_baseline.amr v2_current.amr
+```
+
+```
+AllocMap Diff Report
+====================
+Baseline : v1_baseline.amr
+Current  : v2_current.amr
+
+Function                          Baseline     Current      Delta       Change
+──────────────────────────────────────────────────────────────────────────────
+engine::process_batch             32.0 MB      89.4 MB      +57.4 MB    +179%   ← 红色
+parser::parse_header              12.1 MB      18.6 MB      +6.5 MB     +54%    ← 红色
+alloc::vec::Vec::reserve          44.2 MB      48.8 MB      +4.6 MB     +10%    ← 黄色
+std::collections::HashMap::new    8.3 MB       8.1 MB       -0.2 MB     -2%
+engine::cleanup_buffers           15.0 MB      9.2 MB       -5.8 MB     -39%
+
+5 functions changed (2 new, 0 removed, 3 modified)
+Total delta: +62.5 MB  (+49%)
+```
+
+颜色规则：
+- **红色**：变化幅度 ≥ 50%（绝对增加或减少）
+- **黄色**：变化幅度 ≥ 10% 且 < 50%
+- **无色**：变化幅度 < 10%
+- 输出按绝对字节差降序排列（变化最大的在最前面）
+
+### 在 CI/CD 中使用
+
+```bash
+#!/bin/bash
+# 内存回归检测示例
+
+# 构建两个版本
+git checkout main && cargo build --release
+./target/release/my_service &; sleep 3
+allocmap attach --pid $! --duration 30s --record /tmp/baseline.amr
+kill $!
+
+git checkout feature-branch && cargo build --release
+./target/release/my_service &; sleep 3
+allocmap attach --pid $! --duration 30s --record /tmp/current.amr
+kill $!
+
+# 比较，任何函数变化超过 30% 即报警
+if allocmap diff /tmp/baseline.amr /tmp/current.amr --min-change-pct 30 | grep -q "^Total delta.*+"; then
+  echo "WARN: Memory regression detected"
+  allocmap diff /tmp/baseline.amr /tmp/current.amr
+  exit 1
+fi
+echo "PASS: No significant memory regression"
+```
+
+### 错误情况
+
+```bash
+# 文件不存在
+allocmap diff nonexistent.amr current.amr
+# Error: Cannot open baseline file 'nonexistent.amr': No such file or directory
+
+# 文件格式无效
+allocmap diff corrupted.bin current.amr
+# Error: Failed to parse 'corrupted.bin' as AllocMap recording: invalid magic number
+```
+
+---
+
 ## 使用测试目标程序
 
 AllocMap 内置了 4 个测试目标程序，位于 `tests/target_programs/`，用于演示和集成测试。
@@ -419,7 +612,7 @@ kill $MT_PID
 
 ## 录制到 .amr 文件
 
-> **注意**：`.amr` 文件的读写格式已在 Phase 1 实现，但 `allocmap replay` 回放命令计划在 Phase 2 实现。
+> **注意**：`.amr` 文件的读写格式已在 Phase 1 实现，`allocmap replay` 回放命令已在 Phase 2 Iter 01 实现。
 
 ### 录制
 

@@ -11,7 +11,7 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
 
-# Linux only 依赖
+# Linux-only dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { workspace = true }
 libc = { workspace = true }
@@ -19,3 +19,7 @@ addr2line = { workspace = true }
 gimli = { workspace = true }
 object = { workspace = true }
 rustc-demangle = { workspace = true }
+
+# macOS-only dependencies
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use crate::cmd::{attach, run, snapshot};
+use crate::cmd::{attach, diff, replay, run, snapshot};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -26,6 +26,12 @@ pub enum Commands {
 
     /// Take a non-interactive snapshot and output JSON (suitable for CI/CD)
     Snapshot(snapshot::SnapshotArgs),
+
+    /// Replay a recorded .amr file with full TUI playback
+    Replay(replay::ReplayArgs),
+
+    /// Compare two .amr recordings and show what changed
+    Diff(diff::DiffArgs),
 }
 
 impl Cli {
@@ -34,6 +40,8 @@ impl Cli {
             Commands::Attach(args) => attach::execute(args).await,
             Commands::Run(args) => run::execute(args).await,
             Commands::Snapshot(args) => snapshot::execute(args).await,
+            Commands::Replay(args) => replay::execute(args).await,
+            Commands::Diff(args) => diff::execute(args).await,
         }
     }
 }
