@@ -92,12 +92,15 @@ allocmap/
 │   │       │                           #   - replay_total_ms: u64（Phase 2 Iter 02 新增）回放总时长
 │   │       │                           #   - on_key() 处理键盘事件（q/t/h/f/T/Space/g/G/+/-/↑↓/Enter）
 │   │       │                           #   - 13 个单元测试（iter02 新增）
-│   │       ├── timeline.rs             # 内存时序图组件
-│   │       │                           #   - Unicode block-character 柱状图
-│   │       │                           #   - 颜色：绿（< 1MB/s）黄（1–10MB/s）红（> 10MB/s）
-│   │       │                           #   - format_bytes(u64) 工具函数（公开）
-│   │       ├── hotspot.rs              # 分配热点列表组件
-│   │       │                           #   - top-N AllocationSite 渲染
+│   │       ├── timeline.rs             # 内存时序图组件（Iter 04 完全重写）
+│   │       │                           #   - Braille 双列渲染：每终端字符显示 2 个 1s 数据列
+│   │       │                           #   - Y 轴 × 1.15 顶部余量，锁定 y_axis_max（只增不减）
+│   │       │                           #   - 峰值点白色指示，30s 单调增长 → LightRed 泄漏警告
+│   │       │                           #   - format_bytes(u64) / format_ms(u64) 工具函数（公开）
+│   │       ├── hotspot.rs              # 分配热点列表组件（Iter 04 增强）
+│   │       │                           #   - 9 列表格：#、Function、File:Line、Lang、Live、Live%、Peak、Delta、AvgSz
+│   │       │                           #   - format_file_line() 分级回退：file:line → 文件名 → 库名 → <system>
+│   │       │                           #   - detect_lang() 识别 Rust/C++/Python/C 语言并着色
 │   │       │                           #   - 支持折叠/展开调用栈（Enter 键）
 │   │       ├── theme.rs                # 颜色主题常量（关联函数形式，Theme::xxx()）
 │   │       │   （注：render_threads_panel() 线程面板渲染函数，Phase 2 Iter 03 新增）
@@ -256,4 +259,20 @@ Error: Invalid duration 'xyz': expected format like 30s, 5m, 1h
 
 ---
 
-*最后更新：Phase 2 Iter 03（2026-03-26）*
+*最后更新：Phase 2 Iter 04（2026-03-27）*
+
+---
+
+## Iter 04 新增目录
+
+```
+tests/target_programs/
+├── alloc_c/          # C 多语言测试程序（alloc_c.c）
+├── alloc_cpp/        # C++ 多语言测试程序（alloc_cpp.cpp）
+├── alloc_go/         # Go 多语言测试程序（alloc_go.go，需 go build）
+└── bin/
+    ├── alloc_c       # gcc -g -O0 预编译 C 二进制
+    └── alloc_cpp     # g++ -g -O0 预编译 C++ 二进制
+```
+
+`spike_alloc` 重写后包含 4 个 `#[inline(never)]` 分配函数（50MB-1GB 随机范围），使用 `rand = "0.8"` 随机化大小与持有时间。

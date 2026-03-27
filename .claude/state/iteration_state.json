@@ -1,12 +1,12 @@
 {
   "current_phase": 2,
-  "current_iteration": "03",
-  "current_step": "step1_developers_running",
+  "current_iteration": "04",
+  "current_step": "step7_doc_completed",
   "phase1_iterations": 2,
-  "phase2_iterations": 1,
+  "phase2_iterations": 4,
   "phase1_status": "PASSED",
   "phase2_status": "PASSED",
-  "last_updated": "2026-03-26T04:30:00Z",
+  "last_updated": "2026-03-27T21:20:00Z",
   "phase1_passed": true,
   "phase2_passed": true,
   "phase2_goals": [
@@ -15,6 +15,10 @@
     "macOS support (DYLD_INSERT_LIBRARIES, task_for_pid)",
     "multi-thread tracking (PTRACE_O_TRACECLONE)",
     "replay UI: pause/speed/seek",
-    "diff output table with color"
+    "diff output table with color",
+    "braille timeline chart (2 data cols per char)",
+    "file:line symbol resolution fix (PIE load_base, sleep-phase frame quality)",
+    "spike_alloc rewrite (50MB-1GB random, 4 functions)",
+    "multi-language test programs (C, C++, Go)"
   ]
 }

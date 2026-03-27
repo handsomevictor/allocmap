@@ -250,7 +250,7 @@ docker run --rm --cap-add=SYS_PTRACE --security-opt seccomp:unconfined \
   allocmap-dev bash -c "rustup component add clippy && cargo clippy --workspace -- -D warnings"
 ```
 
-当前测试状态（Phase 2 Iter 03 — COMPLETED）：
+当前测试状态（Phase 2 Iter 04 — COMPLETED）：
 
 | Crate | 测试数 | 状态 |
 |-------|--------|------|
@@ -294,6 +294,10 @@ allocmap snapshot --pid $! --duration 5s
 - [x] macOS 支持（`DYLD_INSERT_LIBRARIES` 注入，基础 RSS 监控）✅
 - [x] 多线程追踪（`PTRACE_O_TRACECLONE` best-effort，`list_threads()` 枚举，`thread_count` 字段）✅
 - [x] 多线程 TUI 视图（`thread_ids: Vec<u32>`，`T` 键切换线程列表面板）✅
+- [x] **Braille 高密度时序图**（每终端字符显示 2 个 1s 数据列，peak 峰值指示点）✅
+- [x] **File:Line 符号解析修复**（PIE load_base 修正，sleep-phase 帧不覆盖分配帧，addr2line 调试日志）✅
+- [x] **spike_alloc 重写**（4 函数 50MB-1GB 随机分配，`rand = "0.8"`）✅
+- [x] **多语言测试程序**（C: alloc_c，C++: alloc_cpp，Go: alloc_go 源码）✅
 - [x] 68 tests，全部通过，Reviewer PASSED，Tester PASSED
 
 #### 各迭代详情
@@ -303,6 +307,7 @@ allocmap snapshot --pid $! --duration 5s
 | Iter 01 | replay + diff + macOS 基础 + 多线程枚举框架 | 64 | ✅ |
 | Iter 02 | Space 暂停修复 + g/G 跳转 + thread_count + PTRACE_O_TRACECLONE | 67 | ✅ |
 | Iter 03 | thread_ids + DisplayMode::Threads + render_threads_panel() | 68 | ✅ |
+| Iter 04 | Braille TUI + 符号解析修复 + spike_alloc 重写 + C/C++/Go 测试程序 | 68 | ✅ |
 
 ## License
 

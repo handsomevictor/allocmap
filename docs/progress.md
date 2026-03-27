@@ -451,4 +451,109 @@ multithreaded 目标程序 snapshot 输出中：
 
 ---
 
+## Phase 2 — Iter 04（2026-03-27）
+
+### 迭代目标
+
+全面优化 TUI 显示质量，修复符号解析，新增多语言测试程序，重写 spike_alloc 覆盖更广泛的分配范围。
+
+### 构建与测试结果
+
+| 检查项 | 结果 |
+|--------|------|
+| `cargo build --release` | PASSED |
+| `cargo clippy --workspace -- -D warnings` | PASSED（0 warnings） |
+| `cargo test -p allocmap-core -p allocmap-ptrace -p allocmap-tui -p allocmap` | PASSED（68 tests，0 failures） |
+
+### 新增 / 修改的文件
+
+#### Timeline TUI 重写（allocmap-tui）
+
+- **`crates/allocmap-tui/src/timeline.rs`**（完全重写）：
+  - **Braille 双列渲染**：每个终端字符显示 2 个 1s 数据列（左/右 braille 子列），每列可表达 5 个填充级别（0-4 点位），使柱状图密度提高一倍
+  - 左列 bit 模式：`[0x00, 0x40, 0x44, 0x46, 0x47]`（点 7→3→2→1，从底到顶）
+  - 右列 bit 模式：`[0x00, 0x80, 0xA0, 0xB0, 0xB8]`（点 8→6→5→4，从底到顶）
+  - braille 字符 = `U+2800 + (left_bits | right_bits)`
+  - **Y 轴 1.15 倍顶部余量**：`y_max = app.y_axis_max * 1.15`，防止峰值顶到轴边
+  - **锁定 Y 轴**：`app.y_axis_max` 只涨不降，防止历史数据滚出后 Y 轴收缩导致闪烁
+  - **峰值指示点**：在 avg 柱顶上方，若 `peak_rows > avg_rows`，在对应行的顶部点位加白色点（左列 `|= 0x01`，右列 `|= 0x08`）
+  - **颜色阈值**（基于 y_max 百分比）：<40% 绿色，40-70% 黄色，70-90% 橙色，>90% 红色
+  - **泄漏检测**：最近 30 个 1s 列单调非递减 → 所有柱变 LightRed + 状态栏显示 ⚠ LEAK?
+  - **X 轴标签**：每 10 个字符位置（= 20 秒数据）显示一个时间戳标签
+  - `format_ms(ms)` 函数将毫秒格式化为 `Xs`/`Xm Ys`/`Xh Ym` 紧凑字符串
+
+- **`crates/allocmap-tui/src/app.rs`**（修改）：
+  - 1s 分桶：`BUCKET_MS = 1_000`（原 5_000），最大列数 `MAX_TIMELINE_COLS = 1_200`
+  - `TimelineColumn` 新增 `peak_bytes: u64` 字段（存储每桶内峰值）
+  - `App` 新增字段：`bucket_peak: u64`（当前桶峰值），`y_axis_max: u64`（只增不减）
+  - `push_frame()` 中：每样本更新 `bucket_peak`，桶提交时保存至 `TimelineColumn.peak_bytes`，同步更新 `y_axis_max`
+
+#### Hotspot 视图增强（allocmap-tui）
+
+- **`crates/allocmap-tui/src/hotspot.rs`**（修改）：
+  - `format_file_line()` 分级回退：`file:line` → 文件名 → 从 `<libname.so.N>` 提取库名 → `<system>`
+  - 后两路径兜底使 libc 帧（`<libc.so.6>`）显示为 `libc.so.6` 而非 `<system>`
+  - `detect_lang()` 基于文件扩展名（`.rs`/`.cpp`/`.cc`/`.py`）和函数名特征（`_Z` 前缀/`::` 含义）识别语言
+  - `SKIP_CONTAINS`/`SKIP_PREFIX` 分离：`"alloc::"` 用 `starts_with` 而非 `contains`，防止误匹配 `spike_alloc::` 等用户模块名
+  - `delta_for_site()` 对比最近两帧的 `live_bytes`，显示红色增量/绿色减量
+  - `peak_for_site()` 扫描最近历史帧并取最大值
+
+#### 符号解析修复（allocmap-ptrace）
+
+- **`crates/allocmap-ptrace/src/sampler.rs`**（修改）：
+  - `AccumSite` 新增 `alloc_events: u64`（堆增长事件计数），`peak_bytes: u64`（all-time 峰值）
+  - **帧优先策略**：只有新帧含有 `file.is_some()` 的帧（来自用户代码）才覆盖 `entry.frames`，防止 nanosleep 等 libc 休眠帧（无 file 信息）覆盖含源文件位置的分配阶段帧
+  - `AllocationSite` 映射：`live_bytes: s.live_bytes`（瞬时值），`alloc_count: s.alloc_events.max(1)`，`peak_bytes: s.peak_bytes`
+
+- **`crates/allocmap-ptrace/src/symbols.rs`**（修改）：
+  - `binary_name_for_ip(ip, pid)`：读取 `/proc/PID/maps` 定位 IP 所在的 mmap 段，提取文件名作为回退函数名（如 `<libc.so.6>`）
+  - **PIE 地址修正**：`load_base` = 对应路径中 `file_offset == 0` 的 mmap 入口的起始地址；`elf_vaddr = ip - load_base`，确保 addr2line 收到正确的 DWARF 虚拟地址
+  - `ALLOCMAP_DEBUG_SYMBOLS` 环境变量：设置后向 stderr 打印每次解析的原始地址、二进制路径、相对地址和解析结果，便于调试
+  - 无 debug info 的二进制（如 strip 后的 libc）直接返回 `<binary_name>` 功能名，不再调用 addr2line
+
+#### 测试程序
+
+- **`tests/target_programs/spike_alloc/src/main.rs`**（重写）：
+  - 4 个 `#[inline(never)]` 函数：`function_small_alloc`（50-100MB，2-5s），`function_medium_alloc`（100-300MB，2-6s），`function_large_alloc`（300MB-1GB，3-8s），`function_burst_alloc`（5-20个×5-20MB，2-4s）
+  - 使用 `rand = "0.8"` 随机化分配大小和持有时长，每次运行模式不同
+  - 适合验证热点检测：4 个函数在 Top Allocators 中应各自独立出现
+
+- **`tests/target_programs/alloc_c/alloc_c.c`**（新文件）：
+  - C 程序，`c_heavy_function()` 分配 150MB，逐页写入，持有 3s，循环执行
+  - 编译：`gcc -g -O0 -o tests/target_programs/bin/alloc_c alloc_c.c`
+
+- **`tests/target_programs/alloc_cpp/alloc_cpp.cpp`**（新文件）：
+  - C++ 程序，`cpp_vector_alloc()` 分配 100-300MB `std::vector<char>`，持有 3s，循环执行
+  - 编译：`g++ -g -O0 -o tests/target_programs/bin/alloc_cpp alloc_cpp.cpp`
+
+- **`tests/target_programs/alloc_go/alloc_go.go`**（新文件）：
+  - Go 程序，`goHeavyAlloc()` 分配 100-300MB `[]byte`，持有 3s，循环执行
+  - 注：EC2 未安装 Go 工具链，当前不提供预编译 binary；用户需 `go build` 自行编译
+
+- **`tests/target_programs/bin/alloc_c`**（新二进制）：预编译的 C 测试程序
+- **`tests/target_programs/bin/alloc_cpp`**（新二进制）：预编译的 C++ 测试程序
+
+### 关键 Bug 修复
+
+#### 符号解析显示 `<system>` 问题
+
+**根因**：ptrace 采样以 50Hz 抓取进程状态。当进程正在 `nanosleep` 中休眠（3s 持有期间约 150 次采样），frame-pointer 展开只能看到 libc 的 sleep 链（`nanosleep → __GI_clock_nanosleep → ...`），这些帧没有 `file` 字段（libc 通常不带调试信息）。`AccumSite.frames` 被这些 sleep-phase 帧覆盖后，`best_user_frame()` 找不到用户代码帧，最终 `format_file_line()` 返回 `<system>`。
+
+**修复方案**：在 `sampler.rs` 中，只有当新帧集合中存在 `file.is_some()` 的帧（即包含源文件位置的用户代码帧）时，才覆盖 `AccumSite.frames`。Sleep-phase 帧（仅 libc，无 file 信息）不再替换已有的高质量帧。
+
+**验证**：使用 `ALLOCMAP_DEBUG_SYMBOLS=1 allocmap attach --pid $(pgrep spike_alloc)` 可以看到 `spike_alloc::function_medium_alloc` 解析到 `src/main.rs:40`，`spike_alloc::function_burst_alloc` 解析到 `src/main.rs:70` 等正确结果。
+
+#### Y 轴闪烁问题
+
+**根因**：前一实现每帧重新计算 `global_max = visible_columns.max()`。当旧数据从左侧滚出，`global_max` 下降，所有柱以新最大值重新缩放，视觉上像是突然"跳跃"。
+
+**修复**：引入 `App.y_axis_max`（只增不减），在 `push_frame` 中更新（仅在新值更高时）。渲染时用 `y_axis_max × 1.15` 作为 Y 轴上限。
+
+### 验收状态
+
+- **Clippy**: 0 warnings
+- **Tests**: 68/68 passed
+- **Symbol resolution**: `spike_alloc` debug build 正确显示 `src/main.rs:行号`
+- **Multi-language binaries**: `alloc_c`、`alloc_cpp` 可运行，`alloc_go` 源码就绪（需 Go 工具链编译）
+
 <!-- 后续迭代记录由 Doc Agent 在每次迭代后追加 -->

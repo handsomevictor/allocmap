@@ -276,4 +276,75 @@ let table = Table::new(rows, [Constraint::Length(8), Constraint::Min(10)])
 
 ---
 
-*最后更新：Phase 2 Iter 03（2026-03-26）*
+---
+
+## Phase 2 — Iter 04（2026-03-27）
+
+### 经验：sleep-phase 帧会污染热点帧列表
+
+**背景**：`PtraceSampler` 以 50Hz 频率对目标进程采样。当目标进程在 `std::thread::sleep(3s)` 中，50Hz 意味着 150 个样本都抓到进程处于 `nanosleep` 系统调用内部的帧，这些帧只有 libc 函数，没有源文件信息。
+
+**问题**：`AccumSite.frames` 每次采样都无条件用最新帧覆盖，导致分配阶段捕获的含 `file` 信息的帧（如 `spike_alloc::function_large_alloc` → `src/main.rs:53`）被 150 个 sleep-phase 帧覆盖，最终 `best_user_frame()` 找不到用户代码，`File:Line` 栏显示 `<system>`。
+
+**修复**：只有当新帧集合中存在 `file.is_some()` 的帧时，才覆盖 `AccumSite.frames`：
+```rust
+let new_has_file = frames.iter().any(|f| f.file.is_some());
+let old_has_file = entry.frames.iter().any(|f| f.file.is_some());
+if new_has_file || !old_has_file {
+    entry.frames = frames;
+}
+```
+
+**教训**：
+1. ptrace 采样是统计性的，分配事件和休眠事件都会被采样，两者比例取决于持有时长与采样频率的比值
+2. 帧质量不等于帧新鲜度，需要保留"最有信息量"的帧而非"最新"的帧
+3. `file.is_some()` 是判断帧质量的快速代理指标：有源文件路径的帧来自调试信息充分的用户代码
+
+---
+
+### 经验：PIE 可执行文件的 addr2line 地址需要减去 load_base
+
+**背景**：Linux PIE（Position Independent Executable）在运行时被 mmap 到随机地址（ASLR）。ptrace 捕获的 RIP 是运行时虚拟地址，但 DWARF 调试信息中的地址是相对 ELF 文件起始的虚拟地址。
+
+**问题**：将运行时地址直接传给 `addr2line` 会得到错误的（或空的）符号信息，因为地址空间不匹配。
+
+**修复**：从 `/proc/PID/maps` 找到包含目标 IP 的映射段，并找到同一路径中 `file_offset == 0` 的段起始地址（即 `load_base`）：
+```rust
+let load_base = entries.iter()
+    .filter(|e| e.path == hit.path && e.file_offset == 0)
+    .map(|e| e.start)
+    .next()
+    .unwrap_or(hit.start);
+let elf_vaddr = ip.saturating_sub(load_base);
+```
+
+**教训**：
+1. 对 PIE 二进制（几乎所有现代 Linux 可执行文件），`addr2line` 需要的是 ELF 虚拟地址，不是进程虚拟地址
+2. `file_offset == 0` 的 mmap 段是第一个 PT_LOAD 段的开始，代表整个 ELF 在内存中的起始位置
+3. 调试符号解析问题加 `ALLOCMAP_DEBUG_SYMBOLS=1` 环境变量即可看到完整的地址变换过程
+
+---
+
+### 经验：braille 字符可将柱状图密度提高一倍
+
+**背景**：每个终端字符（monospace）占一个字符宽，若每秒采样一列则每个字符宽对应 1 秒。终端宽度约 200 字符时，最多显示 200 秒历史。
+
+**问题**：要显示 400 秒历史而不减少时间分辨率，需要每个字符宽对应 2 秒数据，但普通字符（▁▂▃▄▅▆▇█）只能表达一列。
+
+**方案**：使用 Unicode Braille 字符（`U+2800` - `U+28FF`）。每个 braille 字符包含 4×2=8 个点位，分左右两列。左列点位映射 bit 6,2,1,0，右列点位映射 bit 7,5,4,3。每列有 0-4 个点可填充，表达 5 个高度级别（0%-100% 以 25% 为步长）。
+
+**实现**：
+```rust
+const LEFT_BITS:  &[u8] = &[0x00, 0x40, 0x44, 0x46, 0x47]; // 从底到顶填充左列
+const RIGHT_BITS: &[u8] = &[0x00, 0x80, 0xA0, 0xB0, 0xB8]; // 从底到顶填充右列
+let braille = char::from_u32(0x2800 + (left_bits | right_bits) as u32).unwrap();
+```
+
+**教训**：
+1. Braille 字符是终端 UI 中实现"半宽"柱状图的标准技术（btop、bpytop 等工具均采用）
+2. 峰值点可通过在 avg 柱顶部上方的行加单个最高点位（`0x01` 左顶，`0x08` 右顶）表达
+3. 颜色仍按字符整体着色，因为终端不支持同一字符内的分色
+
+---
+
+*最后更新：Phase 2 Iter 04（2026-03-27）*

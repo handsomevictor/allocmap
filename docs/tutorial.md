@@ -825,3 +825,54 @@ ls target/debug/liballocmap_preload.so  # 应存在
 ### Q：火焰图（flamegraph）视图显示占位符？
 
 这是已知限制（Phase 1 Iter 01）。火焰图视图将在后续迭代实现，目前显示 "flamegraph view not yet implemented"。可以使用 `[t]` 时序图或 `[h]` 热点列表视图。
+
+
+---
+
+## 新功能：多语言测试程序（Phase 2 Iter 04）
+
+### 使用 alloc_c 和 alloc_cpp 验证跨语言符号解析
+
+```bash
+# 启动 C 测试程序
+./tests/target_programs/bin/alloc_c &
+allocmap attach --pid $(pgrep alloc_c)
+# 按 h 进入 Hot Spots 视图，File:Line 栏应显示 alloc_c.c:行号
+
+# 启动 C++ 测试程序
+./tests/target_programs/bin/alloc_cpp &
+allocmap attach --pid $(pgrep alloc_cpp)
+# 按 h 进入 Hot Spots 视图，Lang 栏应显示 C++，File:Line 显示 alloc_cpp.cpp:行号
+```
+
+### 使用 spike_alloc 验证大范围随机分配
+
+```bash
+# 构建 debug 版（保留符号信息）
+cargo build -p spike_alloc
+
+# 启动并监控（50MB-1GB 随机分配）
+./target/debug/spike_alloc &
+allocmap attach --pid $(pgrep spike_alloc) --duration 60s
+
+# Timeline 视图（t）可见大幅波动柱状图
+# Hot Spots 视图（h）应显示 function_small_alloc、function_medium_alloc、
+#   function_large_alloc、function_burst_alloc 四个函数，File:Line 显示 src/main.rs:行号
+```
+
+### 调试符号解析
+
+如果 File:Line 显示 `<system>` 而非真实文件名：
+
+```bash
+# 开启符号解析调试日志
+ALLOCMAP_DEBUG_SYMBOLS=1 allocmap attach --pid $PID 2>&1 | grep "debug sym"
+# 输出示例：
+# [debug sym] 0x55b80eb97736 -> /path/to/spike_alloc (rel=0x20736)
+# [debug sym] 0x55b80eb97736: resolved to Some("spike_alloc::function_large_alloc") at Some("src/main.rs"):Some(53)
+```
+
+常见问题：
+- 进程以 `--release` 构建（无调试信息）→ 改用 debug build（`cargo build`，不加 `--release`）
+- 仅 libc 帧可见（进程在 sleep 中采样）→ 正常现象，分配阶段帧会保留，稍后出现
+
