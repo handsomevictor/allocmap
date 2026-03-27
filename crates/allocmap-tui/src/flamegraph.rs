@@ -12,7 +12,7 @@
 ///   White   — C
 ///   Gray    — system / libc / unknown
 use ratatui::{
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
@@ -271,7 +271,6 @@ pub fn render_flamegraph(f: &mut Frame, app: &App, area: Rect) {
         .border_style(Theme::border());
 
     let inner = block.inner(area);
-    let inner_h = inner.height as usize;
     let inner_w = inner.width as usize;
 
     // ── Not enough data yet ──────────────────────────────────────────────────
@@ -322,84 +321,103 @@ pub fn render_flamegraph(f: &mut Frame, app: &App, area: Rect) {
 
     let session_total: u64 = sites.iter().map(|s| s.live_bytes).sum::<u64>().max(1);
 
-    // ── Layout ───────────────────────────────────────────────────────────────
-    // Reserve 2 rows at the bottom: 1 status + 1 legend.
-    let flame_rows = inner_h.saturating_sub(2).max(1);
-
-    // Build levels (level 0 = outermost callers, displayed at chart bottom).
+    // ── Build levels ─────────────────────────────────────────────────────────
+    // level 0 = outermost callers (displayed at chart bottom)
+    // level N = innermost frames  (displayed at chart top)
     let levels = build_levels(sites);
-    let n_levels = levels.len().min(flame_rows);
 
-    // scroll_offset selects the highlighted depth level.
-    let selected = app.scroll_offset.min(n_levels.saturating_sub(1));
+    // Render the outer block first so the inner area is available.
+    f.render_widget(block, area);
 
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(inner_h);
-
-    // ── Empty rows at the top when chart has fewer levels than rows ──────────
-    for _ in 0..flame_rows.saturating_sub(n_levels) {
-        lines.push(Line::from(Span::raw(" ".repeat(inner_w))));
+    if inner.height < 3 || inner.width < 4 {
+        return; // too small to render anything meaningful
     }
 
-    // ── Flame rows: deepest (top of chart) → shallowest (bottom of chart) ───
-    // We render level n_levels-1 first (appears at top), level 0 last (appears
-    // at the bottom, just above the status row).
-    for level_idx in (0..n_levels).rev() {
-        let level = &levels[level_idx];
-        let is_selected_row = level_idx == selected;
-        let spans = render_row(
+    // ── Split inner into [flames | status | legend] ───────────────────────────
+    // Status and legend are pinned to the bottom (1 row each).
+    // The flames section takes all remaining rows; each depth level = exactly
+    // 1 row, rendered from the BOTTOM of the flames section upward.
+    // Empty rows naturally appear at the TOP (no artificial padding needed).
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),    // flames area (variable height)
+            Constraint::Length(1), // status bar
+            Constraint::Length(1), // legend / debug info
+        ])
+        .split(inner);
+
+    let flames_area  = sections[0];
+    let status_area  = sections[1];
+    let legend_area  = sections[2];
+
+    let max_levels = flames_area.height as usize;
+    let n_levels   = levels.len().min(max_levels);
+
+    // scroll_offset selects the highlighted depth level (0 = outermost).
+    let selected = app.scroll_offset.min(n_levels.saturating_sub(1));
+
+    // ── Render each flame row into its own 1-line Rect ────────────────────────
+    // Row for level 0 (outermost) is at the BOTTOM of flames_area.
+    // Row for level n_levels-1 (innermost) is the topmost rendered row.
+    // Rows above that (if any) are left empty — no explicit fill needed.
+    for (level_idx, level) in levels.iter().enumerate().take(n_levels) {
+        let is_sel    = level_idx == selected;
+
+        // y position: bottom of flames_area, offset upward by level_idx
+        let row_y = flames_area.bottom().saturating_sub(1 + level_idx as u16);
+        if row_y < flames_area.y {
+            break; // shouldn't happen since n_levels <= max_levels
+        }
+        let row_rect = Rect {
+            x:      flames_area.x,
+            y:      row_y,
+            width:  flames_area.width,
+            height: 1,
+        };
+
+        let mut spans = render_row(
             &level.blocks,
             level.total_bytes.max(1),
             inner_w,
-            is_selected_row,
+            is_sel,
         );
-        let mut line_spans = spans;
 
-        // Add a left-side depth indicator for the selected row.
-        if is_selected_row && inner_w >= 4 {
-            // Replace first char with a '▶' marker (bold cyan).
-            // We insert a 1-char span at the front and shorten the first
-            // content span so the total width stays at inner_w.
-            line_spans.insert(
-                0,
-                Span::styled(
-                    "▶".to_string(),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                ),
-            );
-            // Trim 1 char from the last text span to keep total width.
-            if let Some(last) = line_spans.last_mut() {
-                let s: String = last.content.chars().rev().skip(1).collect::<String>()
-                    .chars().rev().collect();
-                *last = Span::styled(s, last.style);
+        // ▶ marker on the selected row (replace first char, keep total width).
+        if is_sel && inner_w >= 4 {
+            spans.insert(0, Span::styled(
+                "\u{25b6}".to_string(),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ));
+            if let Some(last) = spans.last_mut() {
+                let trimmed: String = last.content.chars().rev().skip(1)
+                    .collect::<String>().chars().rev().collect();
+                *last = Span::styled(trimmed, last.style);
             }
         }
 
-        lines.push(Line::from(line_spans));
+        f.render_widget(Paragraph::new(Line::from(spans)), row_rect);
     }
 
     // ── Status bar ───────────────────────────────────────────────────────────
-    let status = if n_levels > 0 {
+    let status_text = if n_levels > 0 {
         let level = &levels[selected];
         if let Some(top) = level.blocks.first() {
             let loc = match (&top.file, top.line) {
-                (Some(f), Some(l)) => {
-                    let fname = std::path::Path::new(f.as_str())
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or(f.as_str());
+                (Some(fi), Some(l)) => {
+                    let fname = std::path::Path::new(fi.as_str())
+                        .file_name().and_then(|n| n.to_str()).unwrap_or(fi.as_str());
                     format!("  {}:{}", fname, l)
                 }
-                (Some(f), None) => {
-                    let fname = std::path::Path::new(f.as_str())
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or(f.as_str());
+                (Some(fi), None) => {
+                    let fname = std::path::Path::new(fi.as_str())
+                        .file_name().and_then(|n| n.to_str()).unwrap_or(fi.as_str());
                     format!("  {}", fname)
                 }
                 _ => String::new(),
             };
             format!(
-                " depth={} │ {} — {} ({:.1}%) [{}]{}",
+                " depth={} \u{2502} {} \u{2014} {} ({:.1}%) [{}]{}",
                 selected,
                 top.name,
                 format_bytes(top.bytes),
@@ -408,23 +426,26 @@ pub fn render_flamegraph(f: &mut Frame, app: &App, area: Rect) {
                 loc,
             )
         } else {
-            format!(" depth {} — no data", selected)
+            format!(" depth {} \u{2014} no data", selected)
         }
     } else {
         " No call stack data available ".to_string()
     };
-    lines.push(Line::styled(status, Style::default().fg(Color::Cyan)));
+    f.render_widget(
+        Paragraph::new(status_text).style(Style::default().fg(Color::Cyan)),
+        status_area,
+    );
 
     // ── Legend / debug info ───────────────────────────────────────────────────
-    let legend = format!(
-        " [↑↓] depths  [t]timeline [h]hotspot  total: {}  {} sites  Samples with stack: {}/{} ",
+    let legend_text = format!(
+        " [\u{2191}\u{2193}]depths  [t]timeline [h]hotspot  total:{}  {}sites  stack:{}/{} ",
         format_bytes(session_total),
         sites.len(),
         app.samples_with_stack,
         app.total_samples,
     );
-    lines.push(Line::styled(legend, Theme::dimmed()));
-
-    let p = Paragraph::new(lines).block(block);
-    f.render_widget(p, area);
+    f.render_widget(
+        Paragraph::new(legend_text).style(Theme::dimmed()),
+        legend_area,
+    );
 }

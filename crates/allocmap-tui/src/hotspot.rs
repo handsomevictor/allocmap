@@ -270,6 +270,11 @@ fn collapsed_item(
 }
 
 /// Build expanded multi-line list items for one site (returns multiple ListItems).
+/// Each site uses:
+///   Line 1: index + full function name (bold)
+///   Line 2: indent + File:X · Lang:Y · Live:X · Peak:X · Delta:X · Avg:X
+///   Line 3+: indent + └─ call stack frames (up to 3)
+///   Blank separator line
 #[allow(clippy::too_many_arguments)]
 fn expanded_items(
     site_idx: usize,
@@ -284,6 +289,7 @@ fn expanded_items(
     delta: i64,
     avg_sz: u64,
     is_selected: bool,
+    area_width: usize,
 ) -> Vec<ListItem<'static>> {
     let row_style   = site_row_style(site_idx, is_selected);
     let delta_color = if delta > 0 { Color::Red } else if delta < 0 { Color::Green } else { Color::White };
@@ -303,14 +309,38 @@ fn expanded_items(
         Span::styled(name.to_string(), row_style.add_modifier(Modifier::BOLD)),
     ])));
 
-    // Line 2: file:line · lang · stats
+    // Line 2: compact stats — truncated to area_width so right-side info is never cut off.
+    // Format: "    File:X · Lang:Y · Live:XMB(Y%) · Peak:Z · Delta:W · Avg:V"
+    let indent = "    ";
+    let stats = format!(
+        "{}File:{} \u{b7} Lang:{} \u{b7} Live:{:.1}MB({:.1}%) \u{b7} Peak:{} \u{b7} Delta:{} \u{b7} Avg:{}",
+        indent,
+        file_line_str,
+        lang_label,
+        live_mb, pct,
+        format_bytes(peak),
+        delta_str,
+        format_bytes(avg_sz),
+    );
+    // Truncate so nothing falls off the right edge.
+    let stats_display = truncate(&stats, area_width.saturating_sub(0));
     items.push(ListItem::new(Line::from(vec![
-        Span::raw("    "),
-        Span::styled(file_line_str.to_string(), Theme::dimmed()),
+        Span::styled(stats_display, Style::default().fg(delta_color)),
+        // Lang label re-rendered with its own color, but only if we have room
+        // (otherwise already included in the truncated stats string).
+    ])));
+
+    // Override: split into colored segments so Lang gets its own color even after truncation.
+    // Build segments manually and let ratatui truncate at widget boundary.
+    let _ = items.pop(); // remove the placeholder above
+    items.push(ListItem::new(Line::from(vec![
+        Span::raw(indent.to_string()),
+        Span::styled(format!("File:{}", file_line_str), Theme::dimmed()),
         Span::styled(" \u{b7} ", Theme::dimmed()),
-        Span::styled(lang_label.to_string(), Style::default().fg(lang_color)),
+        Span::styled(format!("Lang:{}", lang_label), Style::default().fg(lang_color)),
         Span::styled(
-            format!(" \u{b7} Live: {:.1}MB ({:.1}%) \u{b7} Peak: {} \u{b7} Delta: {} \u{b7} Avg: {}",
+            format!(
+                " \u{b7} Live:{:.1}MB({:.1}%) \u{b7} Peak:{} \u{b7} Delta:{} \u{b7} Avg:{}",
                 live_mb, pct,
                 format_bytes(peak),
                 delta_str,
@@ -436,7 +466,7 @@ pub fn render_hotspot(f: &mut Frame, app: &App, area: Rect) {
                 site_idx, site, &name, &file_line_str,
                 lang_label, lang_color,
                 live_mb, pct, peak, delta, avg_sz,
-                is_selected,
+                is_selected, area.width as usize,
             ));
         } else {
             items.push(collapsed_item(
