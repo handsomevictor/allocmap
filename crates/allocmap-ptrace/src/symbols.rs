@@ -29,18 +29,43 @@ impl SymbolResolver {
     }
 
     fn resolve_uncached(&self, ip: u64, pid: u32) -> StackFrame {
-        // Try to find the mapping in /proc/<pid>/maps
         if let Ok(symbol) = self.lookup_symbol_in_proc(ip, pid) {
             return symbol;
         }
-
-        // Fallback: return raw address
-        StackFrame {
-            ip,
-            function: None,
-            file: None,
-            line: None,
+        // Try to at least identify the binary
+        if let Ok(binary_name) = self.binary_name_for_ip(ip, pid) {
+            return StackFrame {
+                ip,
+                function: Some(format!("<{}>", binary_name)),
+                file: None,
+                line: None,
+            };
         }
+        StackFrame { ip, function: None, file: None, line: None }
+    }
+
+    fn binary_name_for_ip(&self, ip: u64, pid: u32) -> Result<String> {
+        let maps_path = format!("/proc/{}/maps", pid);
+        let maps_content = std::fs::read_to_string(&maps_path)?;
+        for line in maps_content.lines() {
+            let parts: Vec<&str> = line.splitn(6, ' ').collect();
+            if parts.len() < 6 { continue; }
+            let path = parts[5].trim();
+            if path.is_empty() { continue; }
+            let range = parts[0];
+            let addrs: Vec<&str> = range.splitn(2, '-').collect();
+            if addrs.len() != 2 { continue; }
+            let start = u64::from_str_radix(addrs[0], 16).unwrap_or(0);
+            let end   = u64::from_str_radix(addrs[1], 16).unwrap_or(0);
+            if ip >= start && ip < end {
+                return Ok(std::path::Path::new(path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(path)
+                    .to_string());
+            }
+        }
+        anyhow::bail!("IP not found in maps")
     }
 
     fn lookup_symbol_in_proc(&self, ip: u64, pid: u32) -> Result<StackFrame> {
@@ -101,6 +126,11 @@ impl SymbolResolver {
     }
 
     fn resolve_with_addr2line(&self, relative_ip: u64, binary_path: &str, raw_ip: u64) -> Result<StackFrame> {
+        let debug = std::env::var("ALLOCMAP_DEBUG_SYMBOLS").is_ok();
+        if debug {
+            eprintln!("[debug sym] 0x{:x} -> {} (rel=0x{:x})", raw_ip, binary_path, relative_ip);
+        }
+
         let data = std::fs::read(binary_path)?;
 
         // addr2line 0.22 uses object 0.35 internally; we use addr2line's re-exported object
@@ -118,6 +148,10 @@ impl SymbolResolver {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(binary_path);
+
+            if debug {
+                eprintln!("[debug sym] 0x{:x}: no debug info in {}, using binary name", raw_ip, binary_name);
+            }
 
             return Ok(StackFrame {
                 ip: raw_ip,
@@ -139,6 +173,10 @@ impl SymbolResolver {
             let (file, line) = frame.location
                 .map(|loc| (loc.file.map(|f: &str| f.to_string()), loc.line))
                 .unwrap_or((None, None));
+
+            if debug {
+                eprintln!("[debug sym] 0x{:x}: resolved to {:?} at {:?}:{:?}", raw_ip, function, file, line);
+            }
 
             return Ok(StackFrame {
                 ip: raw_ip,

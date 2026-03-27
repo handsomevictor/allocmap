@@ -9,10 +9,11 @@ use crate::app::App;
 use crate::theme::Theme;
 
 const Y_LABEL_WIDTH: usize = 9; // "  202MB ┤"
-/// Sub-cell block characters (1/8 row increments, index 0 = space)
-const BLOCKS: &[char] = &[' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-/// Peak marker character shown above a bar when peak > avg within that bucket
-const PEAK_MARKER: char = '▔';
+
+// Left column dots fill from bottom (bits 6,2,1,0 for dots 7,3,2,1)
+const LEFT_BITS: &[u8] = &[0x00, 0x40, 0x44, 0x46, 0x47];
+// Right column dots fill from bottom (bits 7,5,4,3 for dots 8,6,5,4)
+const RIGHT_BITS: &[u8] = &[0x00, 0x80, 0xA0, 0xB0, 0xB8];
 
 /// Format a byte count into a compact human-readable string
 pub fn format_bytes(bytes: u64) -> String {
@@ -96,11 +97,23 @@ fn detect_leak(app: &App) -> bool {
     if cols.len() < 30 {
         return false;
     }
-    // Iterator is newest-first; w[0]=newer, w[1]=older → newer >= older means growth
+    // Iterator is newest-first; w[0]=newer, w[1]=older -> newer >= older means growth
     cols.iter().rev().take(30).map(|c| c.heap_bytes)
         .collect::<Vec<_>>()
         .windows(2)
         .all(|w| w[0] >= w[1])
+}
+
+/// Compute the fill level (0..=4) for a braille sub-column at a given chart row.
+/// `avg` is in bytes, `y_max` is in bytes, `chart_height` is number of terminal rows.
+/// `row_from_bottom` is 0 at the bottom row.
+fn col_level(avg: u64, y_max: u64, chart_height: usize, row_from_bottom: usize) -> usize {
+    let h = (avg as f64 / y_max as f64 * chart_height as f64 * 4.0) as usize;
+    let full_rows = h / 4;
+    let frac = h % 4;
+    if row_from_bottom < full_rows { 4 }
+    else if row_from_bottom == full_rows { frac }
+    else { 0 }
 }
 
 /// Render the timeline view showing heap memory over time.
@@ -147,29 +160,20 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    // Show only the most recent chart_cols columns
-    let skip = all_avgs.len().saturating_sub(chart_cols);
+    // Each char displays TWO data columns (left + right braille sub-columns)
+    let max_data_cols = chart_cols * 2;
+    let skip = all_avgs.len().saturating_sub(max_data_cols);
     let col_avgs:  Vec<u64> = all_avgs[skip..].to_vec();
     let col_peaks: Vec<u64> = all_peaks[skip..].to_vec();
     let col_ms:    Vec<u64> = all_end_ms[skip..].to_vec();
 
-    // Locked Y-axis maximum — only ever grows, so historical bars never rescale downward
-    let y_max = app.y_axis_max.max(1);
+    // Y-axis max with 15% headroom above actual peak
+    let y_max = ((app.y_axis_max as f64 * 1.15) as u64).max(1);
 
     // Leak detection: all 30 most-recent committed columns show non-decreasing heap
     let is_leaking = detect_leak(app);
 
     // ── Build chart rows ─────────────────────────────────────────────────────
-    let n_data = col_avgs.len();
-
-    // Pre-zip into Option<(avg, peak)> padded to chart_cols width
-    let padded: Vec<Option<(u64, u64)>> = col_avgs.iter().copied()
-        .zip(col_peaks.iter().copied())
-        .map(|(a, p)| Some((a, p)))
-        .chain(std::iter::repeat_n(None, chart_cols.saturating_sub(n_data)))
-        .take(chart_cols)
-        .collect();
-
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(chart_height + 2);
 
     for row in 0..chart_height {
@@ -183,38 +187,50 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
         let mut group_col = Color::White;
         let mut first     = true;
 
-        for maybe in &padded {
-            let (ch, color) = match maybe {
-                // Padding slot — no data yet
-                None => (' ', Color::DarkGray),
+        for char_pos in 0..chart_cols {
+            let left_i  = char_pos * 2;
+            let right_i = char_pos * 2 + 1;
 
-                Some((avg, peak)) => {
-                    // Average bar height in 1/8-row sub-units
-                    let avg_h      = (*avg as f64 / y_max as f64 * chart_height as f64 * 8.0) as usize;
-                    let avg_rows   = avg_h / 8;
-                    let avg_frac   = (avg_h % 8).min(BLOCKS.len() - 1);
+            let left  = col_avgs.get(left_i).copied();
+            let right = col_avgs.get(right_i).copied();
+            let left_peak  = col_peaks.get(left_i).copied();
+            let right_peak = col_peaks.get(right_i).copied();
 
-                    // Peak marker height
-                    let peak_clamped = (*peak).min(y_max);
-                    let peak_h       = (peak_clamped as f64 / y_max as f64 * chart_height as f64 * 8.0) as usize;
-                    let peak_rows    = peak_h / 8;
+            let (ch, color) = if left.is_none() && right.is_none() {
+                (' ', Color::DarkGray)
+            } else {
+                let la = left.unwrap_or(0);
+                let ra = right.unwrap_or(0);
+                let lp = left_peak.unwrap_or(la);
+                let rp = right_peak.unwrap_or(ra);
 
-                    let bcolor = bar_color(*avg, y_max, is_leaking);
+                let ll = col_level(la, y_max, chart_height, row_from_bottom);
+                let rl = if right.is_some() { col_level(ra, y_max, chart_height, row_from_bottom) } else { 0 };
 
-                    // Peak marker: only shown when peak occupies a strictly higher row than avg
-                    if peak_rows > avg_rows && row_from_bottom == peak_rows {
-                        (PEAK_MARKER, Color::White)
-                    } else if row_from_bottom < avg_rows {
-                        // Inside the filled bar body
-                        ('█', bcolor)
-                    } else if row_from_bottom == avg_rows {
-                        // Top fractional block of the bar
-                        (BLOCKS[avg_frac], bcolor)
-                    } else {
-                        // Above bar (and above or below peak marker if any)
-                        (' ', bcolor) // color used only for span-grouping; space is invisible
-                    }
-                }
+                // Peak indicators: if peak is in a higher row, show top dot
+                let lp_rows = (lp as f64 / y_max as f64 * chart_height as f64 * 4.0) as usize / 4;
+                let rp_rows = (rp as f64 / y_max as f64 * chart_height as f64 * 4.0) as usize / 4;
+                let la_rows = (la as f64 / y_max as f64 * chart_height as f64 * 4.0) as usize / 4;
+                let ra_rows = (ra as f64 / y_max as f64 * chart_height as f64 * 4.0) as usize / 4;
+
+                let left_has_peak  = lp_rows > la_rows && row_from_bottom == lp_rows;
+                let right_has_peak = right.is_some() && rp_rows > ra_rows && row_from_bottom == rp_rows;
+
+                let mut left_bits_val  = LEFT_BITS[ll.min(4)];
+                let mut right_bits_val = RIGHT_BITS[if right.is_some() { rl.min(4) } else { 0 }];
+
+                // Add peak dot at top of sub-column (dot 1 for left, dot 4 for right)
+                if left_has_peak  { left_bits_val  |= 0x01; }  // dot 1 (top-left)
+                if right_has_peak { right_bits_val |= 0x08; }  // dot 4 (top-right)
+
+                let braille = char::from_u32(0x2800 + (left_bits_val | right_bits_val) as u32)
+                    .unwrap_or('\u{2588}');
+
+                let is_peak_only = (left_has_peak && ll == 0) || (right_has_peak && rl == 0);
+                let dominant = la.max(ra);
+                let color = if is_peak_only { Color::White } else { bar_color(dominant, y_max, is_leaking) };
+
+                (braille, color)
             };
 
             // Group consecutive same-color chars into a single Span
@@ -243,21 +259,19 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
     let ruler_prefix  = format!("{:width$}└", "", width = Y_LABEL_WIDTH - 1);
     let mut ruler_chars: Vec<char> = "─".repeat(chart_cols).chars().collect();
 
-    // One label every 10 columns = 10 seconds.
-    // Labels use the actual end_ms of that column so the timestamp is correct.
-    const LABEL_STEP: usize = 10;
+    // X-axis labels: every 10 chars = every 20 data columns = every 20 seconds
     let mut last_label_end = 0usize;
-    for i in (0..n_data).step_by(LABEL_STEP) {
-        if i < last_label_end { continue; }
-        let ms    = col_ms.get(i).copied().unwrap_or(0);
+    for char_pos in (0..chart_cols).step_by(10) {
+        if char_pos < last_label_end { continue; }
+        let data_idx = char_pos * 2; // corresponding data column
+        if data_idx >= col_ms.len() { continue; }
+        let ms = col_ms[data_idx];
         let label = format_ms(ms);
         for (j, ch) in label.chars().enumerate() {
-            let idx = i + j;
-            if idx < ruler_chars.len() {
-                ruler_chars[idx] = ch;
-            }
+            let idx = char_pos + j;
+            if idx < ruler_chars.len() { ruler_chars[idx] = ch; }
         }
-        last_label_end = i + label.len() + 1; // +1 gap to avoid run-together labels
+        last_label_end = char_pos + label.len() + 1;
     }
 
     let ruler_str: String = ruler_chars.iter().collect();
@@ -270,8 +284,8 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
     let latest_heap = app.current_heap_bytes();
     let growth      = app.growth_rate_bytes_per_sec();
     let sign        = if growth >= 0.0 { "+" } else { "-" };
-    let n_cols_shown = n_data.min(chart_cols);
-    let leak_tag    = if is_leaking { "  ⚠ LEAK?" } else { "" };
+    let n_cols_shown = col_avgs.len();  // actual data columns
+    let leak_tag    = if is_leaking { "  \u{26a0} LEAK?" } else { "" };
     let label = format!(
         "{:width$}max={}  current={}  growth={}{}/s  samples={}  cols={}×1s{}",
         "",

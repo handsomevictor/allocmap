@@ -1,71 +1,72 @@
-/// 测试目标程序：spike_alloc
-///
-/// 模拟场景：函数A分配100MB并持有3秒 → 释放 → 函数B分配200MB并持有3秒 → 释放 → 循环
-/// 用于验证 allocmap 能否在时序图中清晰看到两个不同的内存 surge
-///
-/// 使用方式：
-///   ./spike_alloc                  # 默认无限循环
-///   ./spike_alloc --cycles 3       # 循环3次后退出
-///   ./spike_alloc --no-loop        # 只运行一次
 use std::time::Duration;
+use rand::Rng;
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let cycles = parse_cycles(&args);
-
-    println!(
-        "[spike_alloc] started, pid={}, cycles={}",
-        std::process::id(),
-        if cycles == 0 { "infinite".to_string() } else { cycles.to_string() }
-    );
-    println!("[spike_alloc] pattern: function_a(100MB,3s) -> function_b(200MB,3s) -> repeat");
-
-    let mut count = 0;
+    println!("[spike_alloc] started pid={}", std::process::id());
+    println!("[spike_alloc] random allocs 50MB-1GB, hold 2-8s each");
+    let mut rng = rand::thread_rng();
     loop {
-        function_a_heavy_alloc();
-        function_b_heavier_alloc();
-
-        count += 1;
-        if cycles > 0 && count >= cycles {
-            println!("[spike_alloc] completed {} cycles, exiting", count);
-            break;
+        match rng.gen::<u8>() % 4 {
+            0 => function_small_alloc(),
+            1 => function_medium_alloc(),
+            2 => function_large_alloc(),
+            _ => function_burst_alloc(),
         }
     }
 }
 
-/// 函数A：分配100MB，持有3秒后释放
+/// Small allocation: 50-100 MB, hold 2-5 s
 #[inline(never)]
-fn function_a_heavy_alloc() {
-    println!("[spike_alloc] function_a: allocating 100MB...");
-    let data: Vec<u8> = vec![1u8; 100 * 1024 * 1024];
-    // 防止编译器优化掉这块内存
+fn function_small_alloc() {
+    let mut rng = rand::thread_rng();
+    let mb = rng.gen_range(50..=100) as usize;
+    let secs = rng.gen_range(2..=5);
+    println!("[spike_alloc] small_alloc: {}MB for {}s", mb, secs);
+    let data: Vec<u8> = vec![1u8; mb * 1024 * 1024];
     std::hint::black_box(&data);
-    std::thread::sleep(Duration::from_secs(3));
-    println!("[spike_alloc] function_a: releasing 100MB");
+    std::thread::sleep(Duration::from_secs(secs));
     drop(data);
 }
 
-/// 函数B：分配200MB，持有3秒后释放
+/// Medium allocation: 100-300 MB, hold 2-6 s
 #[inline(never)]
-fn function_b_heavier_alloc() {
-    println!("[spike_alloc] function_b: allocating 200MB...");
-    let data: Vec<u8> = vec![2u8; 200 * 1024 * 1024];
+fn function_medium_alloc() {
+    let mut rng = rand::thread_rng();
+    let mb = rng.gen_range(100..=300) as usize;
+    let secs = rng.gen_range(2..=6);
+    println!("[spike_alloc] medium_alloc: {}MB for {}s", mb, secs);
+    let data: Vec<u8> = vec![2u8; mb * 1024 * 1024];
     std::hint::black_box(&data);
-    std::thread::sleep(Duration::from_secs(3));
-    println!("[spike_alloc] function_b: releasing 200MB");
+    std::thread::sleep(Duration::from_secs(secs));
     drop(data);
 }
 
-fn parse_cycles(args: &[String]) -> u64 {
-    for i in 0..args.len() {
-        if args[i] == "--cycles" {
-            if let Some(val) = args.get(i + 1) {
-                return val.parse().unwrap_or(0);
-            }
-        }
-        if args[i] == "--no-loop" {
-            return 1;
-        }
+/// Large allocation: 300 MB-1 GB, hold 3-8 s
+#[inline(never)]
+fn function_large_alloc() {
+    let mut rng = rand::thread_rng();
+    let mb = rng.gen_range(300..=1024) as usize;
+    let secs = rng.gen_range(3..=8);
+    println!("[spike_alloc] large_alloc: {}MB for {}s", mb, secs);
+    let data: Vec<u8> = vec![3u8; mb * 1024 * 1024];
+    std::hint::black_box(&data);
+    std::thread::sleep(Duration::from_secs(secs));
+    drop(data);
+}
+
+/// Burst: many small allocations accumulating, hold 2-4 s
+#[inline(never)]
+fn function_burst_alloc() {
+    let mut rng = rand::thread_rng();
+    let count = rng.gen_range(5..=20);
+    let secs = rng.gen_range(2..=4);
+    println!("[spike_alloc] burst_alloc: {} x ~10MB for {}s", count, secs);
+    let mut chunks: Vec<Vec<u8>> = Vec::with_capacity(count);
+    for _ in 0..count {
+        let mb = rng.gen_range(5..=20) as usize;
+        chunks.push(vec![4u8; mb * 1024 * 1024]);
     }
-    0 // 0 = 无限循环
+    std::hint::black_box(&chunks);
+    std::thread::sleep(Duration::from_secs(secs));
+    drop(chunks);
 }

@@ -182,7 +182,14 @@ impl PtraceSampler {
             entry.live_bytes = heap_bytes;
             entry.live_bytes_sum += heap_bytes;
             entry.sample_count += 1;
-            entry.frames = frames; // keep freshest resolved names
+            // Prefer to keep frames that contain user-code file info (file != None for non-stdlib frame).
+            // This prevents sleep-phase frames (which only show libc without file info) from
+            // overwriting allocation-phase frames that have proper source locations.
+            let new_has_file = frames.iter().any(|f| f.file.is_some());
+            let old_has_file = entry.frames.iter().any(|f| f.file.is_some());
+            if new_has_file || !old_has_file {
+                entry.frames = frames; // keep freshest resolved names
+            }
         }
 
         // Build top_sites sorted by avg_live_bytes (highest first).

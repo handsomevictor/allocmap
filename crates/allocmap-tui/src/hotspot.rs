@@ -76,26 +76,39 @@ fn truncate(s: &str, max_chars: usize) -> String {
 /// Shows the last two path components to keep it compact.
 /// Returns "<system>" for frames with no file info.
 fn format_file_line(frame: &StackFrame) -> String {
-    match (&frame.file, frame.line) {
-        (Some(file), Some(line)) => {
-            let path = std::path::Path::new(file.as_str());
-            let components: Vec<_> = path.components().collect();
-            let short = if components.len() >= 2 {
-                let parent = components[components.len() - 2]
-                    .as_os_str().to_str().unwrap_or("?");
-                let name = components[components.len() - 1]
-                    .as_os_str().to_str().unwrap_or("?");
-                format!("{}/{}", parent, name)
-            } else {
-                path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or(file.as_str())
-                    .to_string()
-            };
-            format!("{}:{}", short, line)
-        }
-        _ => "<system>".to_string(),
+    // Best case: have both file and line from debug info
+    if let (Some(file), Some(line)) = (&frame.file, frame.line) {
+        let path = std::path::Path::new(file.as_str());
+        let components: Vec<_> = path.components().collect();
+        let short = if components.len() >= 2 {
+            let parent = components[components.len() - 2]
+                .as_os_str().to_str().unwrap_or("?");
+            let name = components[components.len() - 1]
+                .as_os_str().to_str().unwrap_or("?");
+            format!("{}/{}", parent, name)
+        } else {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(file.as_str())
+                .to_string()
+        };
+        return format!("{}:{}", short, line);
     }
+    // File but no line number
+    if let Some(file) = &frame.file {
+        if let Some(name) = std::path::Path::new(file.as_str()).file_name().and_then(|n| n.to_str()) {
+            return name.to_string();
+        }
+    }
+    // No file: try to extract library/binary name from "<libname.so.N>" function strings
+    if let Some(func) = &frame.function {
+        if func.starts_with('<') && func.ends_with('>') {
+            let inner = &func[1..func.len() - 1];
+            // e.g. "libc.so.6" -> show as-is
+            return inner.to_string();
+        }
+    }
+    "<system>".to_string()
 }
 
 /// Detect the source language from a StackFrame.
