@@ -347,4 +347,50 @@ let braille = char::from_u32(0x2800 + (left_bits | right_bits) as u32).unwrap();
 
 ---
 
-*最后更新：Phase 2 Iter 04（2026-03-27）*
+---
+
+## Phase 2 — Iter 05（2026-03-27）
+
+### 经验：动态计算 Y 轴宽度而非硬编码常量
+
+**背景**：Timeline 图表的 Y 轴标签显示三行：y_max、y_max/2、0。原始实现硬编码 `Y_LABEL_WIDTH = 9`，基于 `{:>6}` 格式对齐。
+
+**问题**：当 y_max = 1.2GB 时，`format_bytes(1.2GB) = "1.1GB"` = 5 chars，`format_bytes(0.6GB) = "572.2MB"` = 7 chars。`{:>6}` 格式将 5 char 值填充到 6，将 7 char 值保持为 7，导致三行标签宽度不同（8 vs 9），`┤` 列偏移。
+
+**修复**：在渲染时动态计算宽度：
+```rust
+let max_val_len = [y_max, y_max/2, 0].iter().map(|&v| format_bytes(v).len()).max().unwrap_or(2);
+let y_label_width = max_val_len + 2; // +space +corner
+```
+
+**教训**：
+1. TUI 中任何"固定"列宽都应在运行时验证，尤其当内容是格式化数字（字节、时间等）时
+2. 当值跨越单位边界（KB→MB→GB）时，格式化字符串的长度会变化，必须动态适应
+3. `compute_y_label_width` 设为 `pub fn` 使得后续的自动化测试可以验证边界值
+
+---
+
+### 经验：从调用栈聚合火焰图无需完整的树结构
+
+**背景**：传统火焰图工具（如 FlameGraph.pl）从 perf 记录中读取大量采样，每帧包含完整调用栈，通过计数每个 (depth, function) 对出现的频率来确定块宽度。
+
+**AllocMap 的简化**：我们已经有预聚合的 `top_sites`（每个条目含一个代表性调用栈 + `live_bytes`），不需要原始采样数据。直接对每个 site 的调用栈按深度聚合即可：
+
+```rust
+for (depth, frame) in site.frames.iter().rev().enumerate() {
+    depth_data[depth].entry(frame.function.clone()).or_default().0 += site.live_bytes;
+}
+```
+
+**结果**：每个深度层（row）独立归一化（块宽度 = 该层内的占比），图表在有限的采样数量下也能提供有用的视角。
+
+**局限**：这不是严格意义上的火焰图（块位置不反映父子关系的位置对应），而是"按深度分层直方图"。对于展示"哪些函数在哪个调用深度最耗内存"，这已经足够实用。
+
+**教训**：
+1. 在有限数据源上实现工具时，应先设计简化版并验证其有用性，而非追求理论完整性
+2. 每层独立归一化的"扁平火焰图"实现简单（O(N×D) 复杂度），视觉效果与真实火焰图相近
+3. ratatui 中无法高效做"柱状块背景色"，但彩色前景字符（配合 Modifier::BOLD）已足够区分语言
+
+---
+
+*最后更新：Phase 2 Iter 05（2026-03-27）*

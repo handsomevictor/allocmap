@@ -829,7 +829,59 @@ ls target/debug/liballocmap_preload.so  # 应存在
 
 ---
 
-## 新功能：多语言测试程序（Phase 2 Iter 04）
+## 多语言支持测试指南
+
+### 重要说明：Lang 列只显示当前 attach 进程的语言
+
+Top Allocators 视图的 **Lang** 列（Rust / C++ / Py / C / sys）显示的是当前 attach
+进程中的分配帧的语言。每次 `allocmap attach` 只连接一个进程，因此：
+
+- attach 到 `spike_alloc` → Lang 显示 **Rust**（橙色）
+- attach 到 `alloc_cpp` → Lang 显示 **C++**（蓝色）
+- attach 到 `alloc_c` → Lang 显示 **C**（白色）
+- attach 到 Python 进程 → Lang 显示 **Py**（黄色）
+
+要测试多语言，需要在不同终端窗口（或 tmux pane）分别 attach 到对应语言的进程。
+
+### 同时运行多个测试程序并分别 attach
+
+```bash
+# 窗口 1：启动 C 程序并监控
+./tests/target_programs/bin/alloc_c &
+allocmap attach --pid $(pgrep alloc_c)
+# Hot Spots（h 键）：Lang 栏应显示 C（白色），File:Line 显示 alloc_c.c:行号
+
+# 窗口 2：启动 C++ 程序并监控
+./tests/target_programs/bin/alloc_cpp &
+allocmap attach --pid $(pgrep alloc_cpp)
+# Hot Spots（h 键）：Lang 栏应显示 C++（蓝色），File:Line 显示 alloc_cpp.cpp:行号
+
+# 窗口 3：启动 Rust spike_alloc（debug build，保留符号）并监控
+cargo build -p spike_alloc  # debug build，保留调试符号
+./target/debug/spike_alloc &
+allocmap attach --pid $(pgrep spike_alloc)
+# Hot Spots（h 键）：Lang 栏应显示 Rust（橙色），
+#   File:Line 显示 src/main.rs:行号（如 src/main.rs:53）
+```
+
+### Flamegraph 视图（f 键）测试
+
+```bash
+# 启动 spike_alloc（debug build）
+./target/debug/spike_alloc &
+allocmap attach --pid $(pgrep spike_alloc)
+
+# 在 TUI 中按 f 键切换到 Flamegraph 视图
+# 图表从底到顶：
+#   - 底层：outermost callers（如 start_thread / spike_alloc::main）
+#   - 中层：allocation functions（如 function_large_alloc 70%）
+#   - 顶层：innermost frames（如 nanosleep）
+#
+# 按 ↑↓ 在不同深度层间移动
+# 底部状态栏显示当前选中层的完整函数名、文件、行号和字节数
+#
+# 至少需要 10 个样本才会显示数据（通常 attach 后 1 秒内即可）
+```
 
 ### 使用 alloc_c 和 alloc_cpp 验证跨语言符号解析
 

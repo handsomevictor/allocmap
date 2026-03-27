@@ -8,6 +8,7 @@
 /// - White:  general text
 pub mod app;
 pub mod events;
+pub mod flamegraph;
 pub mod hotspot;
 pub mod theme;
 pub mod timeline;
@@ -162,17 +163,7 @@ pub async fn run_tui_loop(
                     hotspot::render_hotspot(f, app, chunks[2]);
                 }
                 DisplayMode::Flamegraph => {
-                    let msg = Paragraph::new(
-                        " Flamegraph view: coming in a future version. Press [t] for timeline. ",
-                    )
-                    .style(Style::default().fg(Color::Yellow))
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title(" Flamegraph ")
-                            .border_style(Theme::border()),
-                    );
-                    f.render_widget(msg, chunks[2]);
+                    flamegraph::render_flamegraph(f, app, chunks[2]);
                 }
                 DisplayMode::Threads => {
                     render_threads_panel(f, app, chunks[2]);

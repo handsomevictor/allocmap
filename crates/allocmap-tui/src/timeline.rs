@@ -8,8 +8,6 @@ use ratatui::{
 use crate::app::App;
 use crate::theme::Theme;
 
-const Y_LABEL_WIDTH: usize = 9; // "  202MB ┤"
-
 // Left column dots fill from bottom (bits 6,2,1,0 for dots 7,3,2,1)
 const LEFT_BITS: &[u8] = &[0x00, 0x40, 0x44, 0x46, 0x47];
 // Right column dots fill from bottom (bits 7,5,4,3 for dots 8,6,5,4)
@@ -43,6 +41,21 @@ fn format_ms(ms: u64) -> String {
     }
 }
 
+/// Compute the Y-axis label column width needed to display all three Y labels
+/// (y_max, y_max/2, 0) with consistent alignment.
+///
+/// Returns the TOTAL column width including value text, one space, and the
+/// corner character (┤ or ┴).  All three label rows will be exactly this
+/// many characters wide, so the corner column never shifts.
+pub fn compute_y_label_width(y_max: u64) -> usize {
+    let max_val_len = [y_max, y_max / 2, 0_u64]
+        .iter()
+        .map(|&v| format_bytes(v).len())
+        .max()
+        .unwrap_or(2);
+    max_val_len + 2 // +1 space  +1 corner char
+}
+
 /// Choose a bar color based on the heap value's proportion of the locked Y-axis max.
 ///
 /// Thresholds are percentage-based so they apply consistently to programs of
@@ -70,24 +83,29 @@ fn bar_color(heap: u64, y_max: u64, is_leaking: bool) -> Color {
 }
 
 /// Compute the Y-axis label for a given chart row.
-/// Returns a fixed 9-character string.
-fn y_label(row: usize, chart_height: usize, y_max: u64) -> String {
+///
+/// `val_width` is the width reserved for the numeric value part (i.e.
+/// `compute_y_label_width(y_max) - 2`).  All rows produced by this function
+/// are exactly `val_width + 2` characters wide, guaranteeing that the corner
+/// characters ┤ / ┴ / │ are always in the same column.
+fn y_label(row: usize, chart_height: usize, y_max: u64, val_width: usize) -> String {
     let is_top = row == 0;
     let is_mid = row == chart_height / 2;
     let is_bot = row == chart_height.saturating_sub(1);
 
-    let (val, corner) = if is_top {
-        (y_max, '┤')
+    if is_top {
+        let s = format_bytes(y_max);
+        format!("{:>width$} ┤", s, width = val_width)
     } else if is_mid && chart_height > 2 {
-        (y_max / 2, '┤')
+        let s = format_bytes(y_max / 2);
+        format!("{:>width$} ┤", s, width = val_width)
     } else if is_bot {
-        (0, '┴')
+        let s = format_bytes(0);
+        format!("{:>width$} ┴", s, width = val_width)
     } else {
-        return "        │".to_string();
-    };
-
-    let s = format_bytes(val);
-    format!("{:>6} {}", s, corner)
+        // Blank row: spaces + vertical bar — same total width
+        format!("{:width$} │", "", width = val_width)
+    }
 }
 
 /// Detect whether the last 30 committed columns show monotonically non-decreasing
@@ -127,7 +145,17 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
     let inner_h = inner.height as usize;
     let inner_w = inner.width as usize;
 
-    if inner_h < 4 || inner_w <= Y_LABEL_WIDTH {
+    // Y-axis max with 15% headroom above actual peak (computed early so we can
+    // derive the label column width before deciding if the terminal is big enough).
+    let y_max = ((app.y_axis_max as f64 * 1.15) as u64).max(1);
+
+    // Compute label width dynamically so the corner column (┤/┴) never shifts,
+    // even when values grow from "0B" to "1.1GB" during a session.
+    let y_label_width = compute_y_label_width(y_max);
+    // Width reserved just for the numeric value text (no space/corner).
+    let val_width = y_label_width - 2;
+
+    if inner_h < 4 || inner_w <= y_label_width {
         let p = Paragraph::new("Terminal too small").block(block).style(Theme::dimmed());
         f.render_widget(p, area);
         return;
@@ -135,7 +163,7 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
 
     // chart_height rows for bars, 1 for X-axis ruler, 1 for stats row
     let chart_height = inner_h.saturating_sub(2).max(1);
-    let chart_cols  = inner_w - Y_LABEL_WIDTH;
+    let chart_cols  = inner_w - y_label_width;
 
     // ── Collect column data ──────────────────────────────────────────────────
     let mut all_avgs:   Vec<u64> = app.timeline_columns.iter().map(|c| c.heap_bytes).collect();
@@ -167,9 +195,6 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
     let col_peaks: Vec<u64> = all_peaks[skip..].to_vec();
     let col_ms:    Vec<u64> = all_end_ms[skip..].to_vec();
 
-    // Y-axis max with 15% headroom above actual peak
-    let y_max = ((app.y_axis_max as f64 * 1.15) as u64).max(1);
-
     // Leak detection: all 30 most-recent committed columns show non-decreasing heap
     let is_leaking = detect_leak(app);
 
@@ -180,7 +205,7 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
         // row 0 = top of chart; row_from_bottom 0 = bottom of chart
         let row_from_bottom = chart_height.saturating_sub(1) - row;
 
-        let ylabel = y_label(row, chart_height, y_max);
+        let ylabel = y_label(row, chart_height, y_max, val_width);
         let mut spans: Vec<Span<'static>> = vec![Span::raw(ylabel)];
 
         let mut group_str = String::with_capacity(chart_cols);
@@ -256,7 +281,8 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
     }
 
     // ── X-axis ruler + time labels ───────────────────────────────────────────
-    let ruler_prefix  = format!("{:width$}└", "", width = Y_LABEL_WIDTH - 1);
+    // ruler_prefix: (y_label_width - 1) spaces + └
+    let ruler_prefix  = format!("{:width$}└", "", width = y_label_width - 1);
     let mut ruler_chars: Vec<char> = "─".repeat(chart_cols).chars().collect();
 
     // X-axis labels: every 10 chars = every 20 data columns = every 20 seconds
@@ -296,7 +322,7 @@ pub fn render_timeline(f: &mut Frame, app: &App, area: Rect) {
         app.total_samples,
         n_cols_shown,
         leak_tag,
-        width = Y_LABEL_WIDTH,
+        width = y_label_width,
     );
     let stats_style = if is_leaking {
         Theme::for_growth_rate(f64::MAX) // always red when leaking

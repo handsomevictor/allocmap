@@ -1,12 +1,12 @@
 {
   "current_phase": 2,
-  "current_iteration": "04",
+  "current_iteration": "05",
   "current_step": "step7_doc_completed",
   "phase1_iterations": 2,
-  "phase2_iterations": 4,
+  "phase2_iterations": 5,
   "phase1_status": "PASSED",
   "phase2_status": "PASSED",
-  "last_updated": "2026-03-27T21:20:00Z",
+  "last_updated": "2026-03-27T22:00:00Z",
   "phase1_passed": true,
   "phase2_passed": true,
   "phase2_goals": [
@@ -19,6 +19,9 @@
     "braille timeline chart (2 data cols per char)",
     "file:line symbol resolution fix (PIE load_base, sleep-phase frame quality)",
     "spike_alloc rewrite (50MB-1GB random, 4 functions)",
-    "multi-language test programs (C, C++, Go)"
+    "multi-language test programs (C, C++, Go)",
+    "Y-axis dynamic label width (compute_y_label_width, ┤ column always fixed)",
+    "flamegraph view (real implementation, depth levels, ↑↓ navigation)",
+    "tutorial multi-language section (Lang column explanation, flamegraph guide)"
   ]
 }

@@ -556,4 +556,69 @@ multithreaded 目标程序 snapshot 输出中：
 - **Symbol resolution**: `spike_alloc` debug build 正确显示 `src/main.rs:行号`
 - **Multi-language binaries**: `alloc_c`、`alloc_cpp` 可运行，`alloc_go` 源码就绪（需 Go 工具链编译）
 
+## Phase 2 — Iter 05（2026-03-27）
+
+### 迭代目标
+
+修复 Y 轴标签宽度不一致导致的对齐问题；实现真实的 Flamegraph 视图；完善多语言测试说明文档。
+
+### 构建与测试结果
+
+| 检查项 | 结果 |
+|--------|------|
+| `cargo build --release` | PASSED |
+| `cargo clippy --workspace -- -D warnings` | PASSED（0 warnings） |
+| `cargo test -p allocmap-core -p allocmap-ptrace -p allocmap-tui -p allocmap` | PASSED（68 tests，0 failures） |
+
+### 新增 / 修改的文件
+
+#### Y 轴标签固定宽度（allocmap-tui/timeline.rs）
+
+**问题**：硬编码 `const Y_LABEL_WIDTH: usize = 9` 导致当 `format_bytes(y_max)` 的长度变化时（如 `"1.1GB"` = 5 chars 但 `"572.2MB"` = 7 chars），三行标签（y_max、y_max/2、0）宽度不一致，`┤`/`┴` 列发生偏移。
+
+**修复**：
+- 新增 `pub fn compute_y_label_width(y_max: u64) -> usize`
+  - 计算 `format_bytes(y_max)`、`format_bytes(y_max/2)`、`format_bytes(0)` 三者的最大长度
+  - 返回 `max_len + 2`（+1 space +1 corner char）
+- `render_timeline` 中将常量替换为动态计算值：`let y_label_width = compute_y_label_width(y_max);`
+- `y_label()` 函数签名新增 `val_width: usize` 参数，所有标签统一使用 `{:>val_width$}` 对齐
+- 验证：对 1.2GB / 545MB / 500B 三种 y_max 值，每行标签均为固定宽度，`┤`/`┴` 永远同列
+
+#### Flamegraph 视图实现（allocmap-tui/flamegraph.rs，新文件）
+
+`f` 键从占位符变为真实的火焰图渲染。
+
+**数据结构**：
+- `FlameBlock { name, bytes, file, line, lang, lang_color }` — 单个函数块
+- `FlameLevel { blocks: Vec<FlameBlock>, total_bytes }` — 一个调用栈深度层
+
+**树构建** (`build_levels`):
+- 遍历 `top_sites` 中每个分配位置的调用栈（`frames[0]` = 最内层叶节点）
+- 反转（最外层在前 = depth 0），按深度聚合：同一深度同名函数的 `live_bytes` 相加
+- 使用 `BTreeMap` 保证字母序稳定，每层内按 bytes 降序排列（最大块在左）
+
+**渲染**：
+- 每终端行 = 一个深度层
+- 最外层（depth 0）在图表底部，最内层在顶部
+- 块宽度 ∝ `block.bytes / level.total_bytes × chart_width`
+- `│` 字符分隔相邻块（深灰色）
+- 语言着色：Rust = 橙色，C++ = 蓝色，Python = 黄色，C = 白色，sys/libc = 深灰色
+- 选中层（`↑↓` 控制）显示 `▶` 标记（青色加粗）
+- 底部状态栏：`depth=N │ 函数名 — X.XMB (XX.X%) [lang] file:line`
+- 底部图例行：快捷键提示 + 总字节数 + 站点数
+
+**最小样本阈值**：`MIN_SAMPLES = 10`，不足时显示 "Collecting data... (N samples, need 10+)"
+
+**多语言说明（tutorial.md）**：
+- 新增"重要说明：Lang 列只显示当前 attach 进程的语言"章节
+- 说明每次 attach 只连接一个进程，要测试不同语言需分别 attach
+- 新增 Flamegraph 视图使用说明（f 键，↑↓ 导航，状态栏信息）
+
+### 验收状态
+
+- **Clippy**: 0 warnings
+- **Tests**: 68/68 passed
+- **Y 轴对齐**: 1.2GB/545MB/500B 三种量级下 `┤` 列均一致（均为固定宽度）
+- **Flamegraph**: 按 f 键显示真实火焰图，支持 ↑↓ 层级导航，底部状态栏显示选中函数详情
+
 <!-- 后续迭代记录由 Doc Agent 在每次迭代后追加 -->
