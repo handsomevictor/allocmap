@@ -306,6 +306,20 @@ pub fn render_flamegraph(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    // If no sites have call stack data, show a helpful diagnostic.
+    let has_stack_data = sites.iter().any(|s| !s.frames.is_empty());
+    if !has_stack_data {
+        let msg = format!(
+            " No call stack data. Ensure target binary has debug symbols (-g or debug=true)\n\n Samples with stack: {} / Total samples: {}",
+            app.samples_with_stack, app.total_samples,
+        );
+        let p = Paragraph::new(msg)
+            .block(block)
+            .style(Style::default().fg(Color::Yellow));
+        f.render_widget(p, area);
+        return;
+    }
+
     let session_total: u64 = sites.iter().map(|s| s.live_bytes).sum::<u64>().max(1);
 
     // ── Layout ───────────────────────────────────────────────────────────────
@@ -401,11 +415,13 @@ pub fn render_flamegraph(f: &mut Frame, app: &App, area: Rect) {
     };
     lines.push(Line::styled(status, Style::default().fg(Color::Cyan)));
 
-    // ── Legend ────────────────────────────────────────────────────────────────
+    // ── Legend / debug info ───────────────────────────────────────────────────
     let legend = format!(
-        " [↑↓] depths  [t]timeline [h]hotspot  total: {}  {} sites ",
+        " [↑↓] depths  [t]timeline [h]hotspot  total: {}  {} sites  Samples with stack: {}/{} ",
         format_bytes(session_total),
         sites.len(),
+        app.samples_with_stack,
+        app.total_samples,
     );
     lines.push(Line::styled(legend, Theme::dimmed()));
 

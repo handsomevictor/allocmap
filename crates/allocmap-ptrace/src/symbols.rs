@@ -58,10 +58,13 @@ impl SymbolResolver {
             let start = u64::from_str_radix(addrs[0], 16).unwrap_or(0);
             let end   = u64::from_str_radix(addrs[1], 16).unwrap_or(0);
             if ip >= start && ip < end {
-                return Ok(std::path::Path::new(path)
+                // Strip " (deleted)" suffix — binary was replaced on disk but
+                // the kernel mapping still exists.
+                let clean = path.trim_end_matches(" (deleted)");
+                return Ok(std::path::Path::new(clean)
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .unwrap_or(path)
+                    .unwrap_or(clean)
                     .to_string());
             }
         }
@@ -76,7 +79,8 @@ impl SymbolResolver {
             start: u64,
             end: u64,
             file_offset: u64,
-            path: String,
+            /// Path with any " (deleted)" suffix stripped, used for ELF reads and entry matching.
+            clean_path: String,
         }
 
         // Parse all relevant map entries (backed by a real file path)
@@ -98,7 +102,9 @@ impl SymbolResolver {
             let start = u64::from_str_radix(addrs[0], 16).unwrap_or(0);
             let end   = u64::from_str_radix(addrs[1], 16).unwrap_or(0);
             let file_offset = u64::from_str_radix(parts[2].trim(), 16).unwrap_or(0);
-            entries.push(MapEntry { start, end, file_offset, path: path.to_string() });
+            // Strip " (deleted)" so addr2line can read the binary by its real path
+            let clean_path = path.trim_end_matches(" (deleted)").to_string();
+            entries.push(MapEntry { start, end, file_offset, clean_path });
         }
 
         // Find which entry contains `ip`
@@ -116,13 +122,25 @@ impl SymbolResolver {
         //
         // This is the address addr2line / DWARF expects.
         let load_base = entries.iter()
-            .filter(|e| e.path == hit.path && e.file_offset == 0)
+            .filter(|e| e.clean_path == hit.clean_path && e.file_offset == 0)
             .map(|e| e.start)
             .next()
             .unwrap_or(hit.start);
 
         let elf_vaddr = ip.saturating_sub(load_base);
-        self.resolve_with_addr2line(elf_vaddr, &hit.path, ip)
+
+        // If the on-disk file was replaced (cargo build), the clean_path may no longer
+        // exist.  Fall back to /proc/PID/exe which still holds the original binary's fd.
+        let readable = if std::path::Path::new(&hit.clean_path).exists() {
+            hit.clean_path.clone()
+        } else {
+            std::fs::read_link(format!("/proc/{}/exe", pid))
+                .ok()
+                .and_then(|p| p.to_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| hit.clean_path.clone())
+        };
+
+        self.resolve_with_addr2line(elf_vaddr, &readable, ip)
     }
 
     fn resolve_with_addr2line(&self, relative_ip: u64, binary_path: &str, raw_ip: u64) -> Result<StackFrame> {

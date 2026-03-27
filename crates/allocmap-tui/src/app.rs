@@ -80,6 +80,12 @@ pub struct App {
     /// Locked Y-axis maximum: only ever grows, never shrinks.
     /// Used by the timeline chart so historical bars never rescale downward.
     pub y_axis_max: u64,
+    /// True when /proc/PID/maps shows "(deleted)" for the target binary.
+    pub binary_deleted: bool,
+    /// Number of sample frames where at least one top_site had a non-empty call stack.
+    pub samples_with_stack: u64,
+    /// When true, all hotspot rows are shown in expanded multi-line format.
+    pub hotspot_all_expanded: bool,
 }
 
 impl App {
@@ -108,6 +114,9 @@ impl App {
             bucket_start_ms: None,
             peak_heap_bytes: 0,
             y_axis_max: 0,
+            binary_deleted: false,
+            samples_with_stack: 0,
+            hotspot_all_expanded: false,
         }
     }
 
@@ -154,11 +163,28 @@ impl App {
             self.bucket_count += 1;
         }
 
+        // Track call-stack availability
+        if frame.top_sites.iter().any(|s| !s.frames.is_empty()) {
+            self.samples_with_stack += 1;
+        }
+
         if self.frames.len() >= MAX_FRAMES {
             self.frames.pop_front();
         }
         self.frames.push_back(frame);
         self.total_samples += 1;
+
+        // Check for replaced binary every 50 samples (~1 s at 50 Hz).
+        // /proc/PID/maps appends " (deleted)" when the on-disk file is replaced.
+        if !self.is_replay && self.total_samples.is_multiple_of(50) {
+            let maps_path = format!("/proc/{}/maps", self.pid);
+            if let Ok(content) = std::fs::read_to_string(&maps_path) {
+                self.binary_deleted = content.lines().any(|l| {
+                    let path_part = l.splitn(6, ' ').nth(5).unwrap_or("").trim();
+                    path_part.ends_with("(deleted)") && path_part.starts_with('/')
+                });
+            }
+        }
         // Grow expanded list to match hotspot count
         if let Some(latest) = self.frames.back() {
             let n = latest.top_sites.len();
@@ -286,6 +312,10 @@ impl App {
                 if idx < self.hotspot_expanded.len() {
                     self.hotspot_expanded[idx] = !self.hotspot_expanded[idx];
                 }
+            }
+            KeyCode::Char('e') => {
+                // Toggle all hotspot rows expanded/collapsed
+                self.hotspot_all_expanded = !self.hotspot_all_expanded;
             }
             KeyCode::Char(' ') if self.is_replay => {
                 self.replay_paused = !self.replay_paused;

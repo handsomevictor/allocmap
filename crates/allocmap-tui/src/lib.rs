@@ -174,7 +174,7 @@ pub async fn run_tui_loop(
             let keys_text = if app.is_replay {
                 " [q]quit  [t]timeline  [h]hotspot  [T]threads  [Space]pause  [+/-]speed  [g]start  [G]end  [↑↓]scroll "
             } else {
-                " [q]quit  [t]timeline  [h]hotspot  [f]flamegraph  [T]threads  [↑↓]scroll  [Enter]expand "
+                " [q]quit  [t]timeline  [h]hotspot  [f]flamegraph  [T]threads  [↑↓]scroll  [Enter]expand  [e]expand/collapse all "
             };
             let keys = Paragraph::new(keys_text)
             .style(Style::default().fg(Color::DarkGray));
